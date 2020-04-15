@@ -204,7 +204,7 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
 
         # Determine primitive size
         l, w, h = ((maxx - minx) / num_x, (maxy - miny) / num_y,
-                                 (maxz - minz) / num_z)
+                   (maxz - minz) / num_z)
         size = min(l, w, h)
         scale = (l / size, w / size, h / size)
         if primitive == "voxel":
@@ -212,21 +212,21 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
         elif primitive == "tetra":
             vol_primitive = (w * l * h) / 6
 
-        minx, maxx, miny, maxy = reduce_boundingbox(upper_mesh, lower_mesh,
-                                 threshold, minx, maxx, miny, maxy, maxz)
+        minx, maxx, miny, maxy = reduce_boundingbox(
+            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
 
         # Go over every primitive in bounding box space
         for z in np.arange(minz, maxz, h):
             for y in np.arange(miny, maxy, w):
                 for x in np.arange(minx, maxx, l):
-                    if primitive == "voxel":    
+                    if primitive == "voxel":
                         center = (x+l/2, y+w/2, z+h/2)
 
                         # Cast ray up to upper mesh and ray down to lower mesh
-                        res_up = D.objects[upper_mesh].ray_cast(center,
-                                 (0, 0, 1), distance=max_distance)
-                        res_down = D.objects[lower_mesh].ray_cast(center,
-                                   (0, 0, -1), distance=max_distance)
+                        res_up = D.objects[upper_mesh].ray_cast(
+                            center, (0, 0, 1), distance=max_distance)
+                        res_down = D.objects[lower_mesh].ray_cast(
+                            center, (0, 0, -1), distance=max_distance)
 
                         # If both rays hit the mesh, centroid is in between the
                         # meshes.
@@ -252,20 +252,21 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
                             elif v3 == other_vs[4] or v4 == other_vs[4]:
                                 dist_down = h / 2
 
-                            # Cast ray up to upper mesh and ray down to lower mesh
-                            res_up = D.objects[upper_mesh].ray_cast(center,
-                                     (0, 0, 1), distance=max_distance)
-                            res_down = D.objects[lower_mesh].ray_cast(center,
-                                       (0, 0, -1), distance=max_distance)
+                            # Cast ray up to upper mesh and down to lower mesh
+                            res_up = D.objects[upper_mesh].ray_cast(
+                                center, (0, 0, 1), distance=max_distance)
+                            res_down = D.objects[lower_mesh].ray_cast(
+                                center, (0, 0, -1), distance=max_distance)
 
-                            # If both rays hit the mesh, centroid is in between the
-                            # meshes.
+                            # If both rays hit the mesh, centroid is in between
+                            # the meshes.
                             # Decide if primitive is part of the volume.
                             tot_dist = (dist_btwn_pts(res_up[1], center) +
                                         dist_btwn_pts(res_down[1], center))
-                            if (res_up[0] and res_down[0] and
-                                    dist_btwn_pts(res_up[1], center) >= dist_up and
-                                    dist_btwn_pts(res_down[1], center) >= dist_down):
+                            if (res_up[0] and res_down[0] and dist_btwn_pts(
+                                    res_up[1], center) >= dist_up and
+                                    dist_btwn_pts(res_down[1], center) >=
+                                    dist_down):
                                 volume_primitives.append((v1, v2, v3, v4))
                                 cur_volume += vol_primitive
         voxelize(size, scale, volume_primitives, rbgas[upper_mesh])
@@ -291,8 +292,9 @@ def main():
     minz, maxz = minz + difz, maxz + difz
 
     print("Min x, max x: {min_x}, {max_x}\nMin y, max y: {min_y}, {max_y}\n"
-          "Min z, max z: {min_z}, {max_z}".format(min_x=minx, max_x=maxx,
-          min_y=miny, max_y=maxy, min_z=minz, max_z=maxz))
+          "Min z, max z: {min_z}, {max_z}".format(
+              min_x=minx, max_x=maxx, min_y=miny, max_y=maxy, min_z=minz,
+              max_z=maxz))
 
     threshold = 0.3
     primitive = "voxel"
