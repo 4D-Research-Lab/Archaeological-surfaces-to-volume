@@ -27,6 +27,7 @@ BLUE = (0, 0, 1, 1)
 GREY = (0.5, 0.5, 0.5, 1)
 BLACK = (0, 0, 0, 1)
 WHITE = (1, 1, 1, 1)
+RGBAS = [RED, GREEN, BLUE, GREY, BLACK, WHITE]
 
 
 def init():
@@ -96,7 +97,7 @@ def translate_to_origin(min_x, max_x, min_y, max_y, min_z, max_z):
 
 def ordered_meshes():
     """Return the list of indices in de bpy.data.objects list of all
-    (highest avg z-coordinate of vertices) objects from high to low."""
+    objects from high to low (highest avg z-coordinate of vertices)."""
     mesh_list = []
 
     for i, obj in enumerate(D.objects):
@@ -118,15 +119,77 @@ def center_tetrahedron(v1, v2, v3, v4):
     return tuple(el / 4 for el in s)
 
 
-def voxelize(size, scale, voxel_locations, rgba):
-    """Add voxels to the scene to visualize the volume."""
-    color = bpy.data.materials.new("Layer_color")
+def make_voxel_verts(origin, length, width, height):
+    """Make a list of vertices for given origin and sizes."""
+    v0 = origin
+    v1 = (origin[0] + length, origin[1], origin[2])
+    v2 = (origin[0], origin[1] + width, origin[2])
+    v3 = (origin[0] + length, origin[1] + width, origin[2])
+    v4 = (origin[0], origin[1], origin[2] + height)
+    v5 = (origin[0] + length, origin[1], origin[2] + height)
+    v6 = (origin[0], origin[1] + width, origin[2] + height)
+    v7 = (origin[0] + length, origin[1] + width, origin[2] + height)
+    return [v0, v1, v2, v3, v4, v5, v6, v7]
 
-    for loc in voxel_locations:
-        bpy.ops.mesh.primitive_cube_add(size=size, location=loc)
-        bpy.ops.transform.resize(value=scale)
+
+def make_voxel_faces():
+    """Make a list of faces for given vertices of a cube."""
+    f1 = (0, 1, 3, 2)
+    f2 = (4, 5, 7, 6)
+    f3 = (0, 2, 6, 4)
+    f4 = (1, 3, 7, 5)
+    f5 = (0, 1, 5, 4)
+    f6 = (2, 3, 7, 6)
+    return [f1, f2, f3, f4, f5, f6]
+
+
+def draw_cubes(origins, length, width, height, rgba):
+    """Draw cubes from given origins, size and color"""
+    color = D.materials.new("Layer_color")
+    faces = make_voxel_faces()
+
+    for o in origins:
+        verts = make_voxel_verts(o, length, width, height)
+
+        mesh = D.meshes.new("cube")
+        mesh.from_pydata(verts, [], faces)
+        mesh.validate()
+        mesh.update()
+
+        new_object = D.objects.new("cube", mesh)
+        new_object.data = mesh
+
+        C.collection.objects.link(new_object)
+        C.view_layer.objects.active = new_object
+        new_object.select_set(True)
+
         C.active_object.data.materials.append(color)
         C.object.active_material.diffuse_color = rgba
+        new_object.select_set(False)
+
+
+def draw_tetrahedra(vertices, rgba):
+    """Draw tetrahedra from given vertices and color."""
+    faces = [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)]
+    color = D.materials.new("Layer_color")
+
+    for verts in vertices:
+        # Create new mesh structure.
+        mesh = D.meshes.new("tetrahedron")
+        mesh.from_pydata(verts, [], faces)
+        mesh.validate()
+        mesh.update()
+
+        new_object = D.objects.new("tetrahedron", mesh)
+        new_object.data = mesh
+
+        C.collection.objects.link(new_object)
+        C.view_layer.objects.active = new_object
+        new_object.select_set(True)
+
+        C.active_object.data.materials.append(color)
+        C.object.active_material.diffuse_color = rgba
+        new_object.select_set(False)
 
 
 def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
@@ -140,13 +203,14 @@ def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
     miny_found, maxy_found = False, False
 
     while not (minx_found and maxx_found):
-        for y in np.linspace(miny, maxy, 16):
+        for y in np.linspace(miny, maxy, 50):
             if not minx_found:
                 min1_ray = D.objects[mesh1].ray_cast((cur_minx, y, c_height),
                                                      (0, 0, -1))
                 min2_ray = D.objects[mesh2].ray_cast((cur_minx, y, c_height),
                                                      (0, 0, -1))
-                if dist_btwn_pts(min1_ray[1], min2_ray[1]) >= threshold:
+                if (min1_ray[0] and min2_ray[0] and
+                        dist_btwn_pts(min1_ray[1], min2_ray[1]) >= threshold):
                     minx_found = True
                     minx = cur_minx
 
@@ -155,7 +219,8 @@ def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
                                                      (0, 0, -1))
                 max2_ray = D.objects[mesh2].ray_cast((cur_maxx, y, c_height),
                                                      (0, 0, -1))
-                if dist_btwn_pts(max1_ray[1], max2_ray[1]) >= threshold:
+                if (max1_ray[0] and max2_ray[0] and
+                        dist_btwn_pts(max1_ray[1], max2_ray[1]) >= threshold):
                     maxx_found = True
                     maxx = cur_maxx
 
@@ -163,13 +228,14 @@ def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
         cur_maxx -= stepsize
 
     while not (miny_found and maxy_found):
-        for x in np.linspace(minx, maxx, 16):
+        for x in np.linspace(minx, maxx, 50):
             if not miny_found:
                 min1_ray = D.objects[mesh1].ray_cast((x, cur_miny, c_height),
                                                      (0, 0, -1))
                 min2_ray = D.objects[mesh2].ray_cast((x, cur_miny, c_height),
                                                      (0, 0, -1))
-                if dist_btwn_pts(min1_ray[1], min2_ray[1]) >= threshold:
+                if (min1_ray[0] and min2_ray[0] and
+                        dist_btwn_pts(min1_ray[1], min2_ray[1]) >= threshold):
                     miny_found = True
                     miny = cur_miny
 
@@ -178,42 +244,43 @@ def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
                                                      (0, 0, -1))
                 max2_ray = D.objects[mesh2].ray_cast((x, cur_maxy, c_height),
                                                      (0, 0, -1))
-                if dist_btwn_pts(max1_ray[1], max2_ray[1]) >= threshold:
+                if (max1_ray[0] and max2_ray[0] and
+                        dist_btwn_pts(max1_ray[1], max2_ray[1]) >= threshold):
                     maxy_found = True
                     maxy = cur_maxy
 
         cur_miny += stepsize
         cur_maxy -= stepsize
 
-    # print("New bounding box: minx %.2f, maxx %.2f, miny %.2f, maxy %.2f" %
-    #       (minx, maxx, miny, maxy))
+    print("New bounding box: minx %.2f, maxx %.2f, miny %.2f, maxy %.2f" %
+          (minx, maxx, miny, maxy))
     return minx, maxx, miny, maxy
 
 
 def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
                              maxy, minz, maxz, primitive="voxel"):
     """Space-oriented algorithm to make a 3D model out of 2 trianglar
-    meshes."""
+    meshes."""  # TODO: Split this function up in multiple functions!
     tot_volume = 0
-    rbgas = [RED, GREEN, BLUE, BLACK]
     max_distance = maxz - minz
     high_low = ordered_meshes()
     for upper_mesh, lower_mesh in zip(high_low[:-1], high_low[1:]):
         volume_primitives = []
         cur_volume = 0
 
+        minx, maxx, miny, maxy = reduce_boundingbox(
+            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
+
         # Determine primitive size
         l, w, h = ((maxx - minx) / num_x, (maxy - miny) / num_y,
                    (maxz - minz) / num_z)
-        size = min(l, w, h)
-        scale = (l / size, w / size, h / size)
+
+        # size = min(l, w, h)
+        # scale = (l / size, w / size, h / size)
         if primitive == "voxel":
             vol_primitive = w * l * h
         elif primitive == "tetra":
             vol_primitive = (w * l * h) / 6
-
-        minx, maxx, miny, maxy = reduce_boundingbox(
-            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
 
         # Go over every primitive in bounding box space
         for z in np.arange(minz, maxz, h):
@@ -236,7 +303,7 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
                         if (res_up[0] and res_down[0] and
                                 dist_btwn_pts(res_up[1], center) >= (h / 2) and
                                 dist_btwn_pts(res_down[1], center) >= (h / 2)):
-                            volume_primitives.append(center)
+                            volume_primitives.append((x, y, z))
                             cur_volume += vol_primitive
                     elif primitive == "tetra":
                         v1 = (x, y, z)
@@ -261,15 +328,19 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
                             # If both rays hit the mesh, centroid is in between
                             # the meshes.
                             # Decide if primitive is part of the volume.
-                            tot_dist = (dist_btwn_pts(res_up[1], center) +
-                                        dist_btwn_pts(res_down[1], center))
                             if (res_up[0] and res_down[0] and dist_btwn_pts(
                                     res_up[1], center) >= dist_up and
                                     dist_btwn_pts(res_down[1], center) >=
                                     dist_down):
                                 volume_primitives.append((v1, v2, v3, v4))
                                 cur_volume += vol_primitive
-        voxelize(size, scale, volume_primitives, rbgas[upper_mesh])
+
+        if primitive == "voxel":
+            draw_cubes(volume_primitives, l, w, h, RGBAS[upper_mesh])
+            # draw_cubes(size, scale, volume_primitives, RGBAS[upper_mesh])
+        elif primitive == "tetra":
+            draw_tetrahedra(volume_primitives, RGBAS[upper_mesh])
+
         print("The difference in volume is %.2f m3." % cur_volume)
         tot_volume += cur_volume
 
@@ -296,9 +367,9 @@ def main():
               min_x=minx, max_x=maxx, min_y=miny, max_y=maxy, min_z=minz,
               max_z=maxz))
 
-    threshold = 0.3
-    primitive = "voxel"
-    num_x, num_y, num_z = 20, 20, 10
+    threshold = 0.05
+    primitive = "tetra"
+    num_x, num_y, num_z = 50, 50, 10
     volume = space_oriented_algorithm(num_x, num_y, num_z, threshold, minx,
                                       maxx, miny, maxy, minz, maxz,
                                       primitive=primitive)
