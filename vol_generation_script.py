@@ -28,14 +28,23 @@ GREY = (0.5, 0.5, 0.5, 1)
 BLACK = (0, 0, 0, 1)
 WHITE = (1, 1, 1, 1)
 RGBAS = [RED, GREEN, BLUE, GREY, BLACK, WHITE]
+TEST_VOLS = {"mo": 2255372.6832, "to": 1174735.7603, "cy": 6242890.2415,
+             "co": 2080963.4138, "cu": 8000000, "uv": 4121941.1484, 
+             "ic": 3658712.0869}
+MONKEY_VOL = 2255372.6832
+TORUS_VOL = 1174735.7603
+CYL_VOL = 6242890.2415
+CONE_VOL = 2080963.4138
+CUBE_VOL = 8000000
 
 
-def init():
+def init(test):
     """Initialize the scene by removing the cube, camera and light and import
     and orientate the trench objects."""
     clear_scene()
-    import_objects()
-    rotate_objects()
+    if not test:
+        import_objects()
+        rotate_objects()
 
 
 def clear_scene():
@@ -257,19 +266,21 @@ def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
     return minx, maxx, miny, maxy
 
 
-def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
-                             maxy, minz, maxz, primitive="voxel"):
+def space_oriented_algorithm(
+        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
+        maxz, primitive="voxel", test=False):
     """Space-oriented algorithm to make a 3D model out of 2 trianglar
     meshes."""  # TODO: Split this function up in multiple functions!
     tot_volume = 0
     max_distance = maxz - minz
-    high_low = ordered_meshes()
-    for upper_mesh, lower_mesh in zip(high_low[:-1], high_low[1:]):
+    for upper_mesh, lower_mesh in zip(meshes[:-1], meshes[1:]):
         volume_primitives = []
         cur_volume = 0
 
-        minx, maxx, miny, maxy = reduce_boundingbox(
-            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
+        if not test:
+            minx, maxx, miny, maxy = reduce_boundingbox(
+                upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy,
+                maxz)
 
         # Determine primitive size
         l, w, h = ((maxx - minx) / num_x, (maxy - miny) / num_y,
@@ -278,9 +289,9 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
         # size = min(l, w, h)
         # scale = (l / size, w / size, h / size)
         if primitive == "voxel":
-            vol_primitive = w * l * h
+            vol_primitive = w * l * h * 1000000
         elif primitive == "tetra":
-            vol_primitive = (w * l * h) / 6
+            vol_primitive = 1000000 * (w * l * h) / 6
 
         # Go over every primitive in bounding box space
         for z in np.arange(minz, maxz, h):
@@ -298,11 +309,9 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
                         # If both rays hit the mesh, centroid is in between the
                         # meshes.
                         # Decide if primitive is part of the volume.
-                        tot_dist = (dist_btwn_pts(res_up[1], center) +
-                                    dist_btwn_pts(res_down[1], center))
                         if (res_up[0] and res_down[0] and
-                                dist_btwn_pts(res_up[1], center) >= (h / 2) and
-                                dist_btwn_pts(res_down[1], center) >= (h / 2)):
+                                dist_btwn_pts(res_up[1], center) >= 0.75 * (h / 2) and
+                                dist_btwn_pts(res_down[1], center) >= 0.75 * (h / 2)):
                             volume_primitives.append((x, y, z))
                             cur_volume += vol_primitive
                     elif primitive == "tetra":
@@ -328,10 +337,12 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
                             # If both rays hit the mesh, centroid is in between
                             # the meshes.
                             # Decide if primitive is part of the volume.
-                            if (res_up[0] and res_down[0] and dist_btwn_pts(
-                                    res_up[1], center) >= dist_up and
-                                    dist_btwn_pts(res_down[1], center) >=
-                                    dist_down):
+                            total_dist = abs(dist_btwn_pts(res_up[1], center) -
+                                             dist_btwn_pts(res_down[1], center)) 
+                            if (res_up[0] and res_down[0]): # and total_dist >= (dist_up + dist_down) / 2): # dist_btwn_pts(
+                                    # res_up[1], center) >= (0.5 * dist_up) and
+                                    # dist_btwn_pts(res_down[1], center) >=
+                                    # (0.5 * dist_down)):
                                 volume_primitives.append((v1, v2, v3, v4))
                                 cur_volume += vol_primitive
 
@@ -341,7 +352,7 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
         elif primitive == "tetra":
             draw_tetrahedra(volume_primitives, RGBAS[upper_mesh])
 
-        print("The difference in volume is %.2f m3." % cur_volume)
+        # print("The difference in volume is %.2f cm3." % cur_volume)
         tot_volume += cur_volume
 
     # for obj in [o for o in D.objects if not o.name.startswith("C")]:
@@ -350,30 +361,75 @@ def space_oriented_algorithm(num_x, num_y, num_z, threshold, minx, maxx, miny,
     return tot_volume
 
 
+def vol_test(num_x, num_y, num_z, threshold):
+    """Test the self-made algorithm against Blenders built-in for closed
+    meshes. Volumes are here calculated in cm^3."""
+    monkey = bpy.ops.mesh.primitive_monkey_add
+    torus = bpy.ops.mesh.primitive_torus_add
+    cyl = bpy.ops.mesh.primitive_cylinder_add
+    cone = bpy.ops.mesh.primitive_cone_add
+    cube = bpy.ops.mesh.primitive_cube_add
+    uvsphere = bpy.ops.mesh.primitive_uv_sphere_add
+    icosphere = bpy.ops.mesh.primitive_ico_sphere_add
+    # TODO: more primitives. Then volume calculation.
+
+    for prim in ["tetra"]:
+        for name, obj in [("mo", monkey), ("to", torus), ("cy", cyl), ("co", cone),
+                          ("cu", cube), ("uv", uvsphere), ("ic", icosphere)]:
+            obj()
+            obj_vol = TEST_VOLS[name]
+
+            minx, maxx, miny, maxy, minz, maxz = find_minmax()
+
+            vol = space_oriented_algorithm(
+                [0, 0], num_x, num_y, num_z, threshold, minx, maxx, miny, maxy,
+                minz, maxz, primitive=prim, test=True)
+            vol_dif = abs(obj_vol - vol)
+            
+            print("Calculated volume for space-oriented %s algorithm: %.4f ("
+                  "exact volume is %.4f)" % (prim, vol, obj_vol))
+            print("The difference is thus %.4f or %.2f percent" % (vol_dif, 100 * vol_dif / vol))
+
+            clear_scene()
+            # bpy.ops.object.select_all(action="SELECT")
+            # bpy.ops.object.delete()
+
+        print()
+
+
 def main():
     """Execute the script."""
-    init()
-    minx, maxx, miny, maxy, minz, maxz = find_minmax()
-
-    difx, dify, difz = translate_to_origin(minx, maxx, miny, maxy, minz, maxz)
-
-    # Update the new minimum and maximum coordinates.
-    minx, maxx = minx + difx, maxx + difx
-    miny, maxy = miny + dify, maxy + dify
-    minz, maxz = minz + difz, maxz + difz
-
-    print("Min x, max x: {min_x}, {max_x}\nMin y, max y: {min_y}, {max_y}\n"
-          "Min z, max z: {min_z}, {max_z}".format(
-              min_x=minx, max_x=maxx, min_y=miny, max_y=maxy, min_z=minz,
-              max_z=maxz))
+    test = True
+    init(test)
 
     threshold = 0.05
-    primitive = "tetra"
-    num_x, num_y, num_z = 50, 50, 10
-    volume = space_oriented_algorithm(num_x, num_y, num_z, threshold, minx,
-                                      maxx, miny, maxy, minz, maxz,
-                                      primitive=primitive)
-    print("The difference in volume is %.2f m3." % volume)
+    num_x, num_y, num_z = 10, 10, 10
+    print("Number of primitives in x-direction: %d, y-direction: %d and "
+          "z-direction: %d" % (num_x, num_y, num_z))
+
+    if test:
+        vol_test(num_x, num_y, num_z, threshold)
+    else:
+        minx, maxx, miny, maxy, minz, maxz = find_minmax()
+        difx, dify, difz = translate_to_origin(minx, maxx, miny, maxy, minz,
+                                               maxz)
+
+        # Update the new minimum and maximum coordinates.
+        minx, maxx = minx + difx, maxx + difx
+        miny, maxy = miny + dify, maxy + dify
+        minz, maxz = minz + difz, maxz + difz
+
+        print("Min x, max x: {min_x}, {max_x}\nMin y, max y: {min_y}, {max_y}"
+              "\nMin z, max z: {min_z}, {max_z}".format(
+                  min_x=minx, max_x=maxx, min_y=miny, max_y=maxy, min_z=minz,
+                  max_z=maxz))
+
+        primitive = "tetra"
+        volume = space_oriented_algorithm(
+            ordered_meshes(), num_x, num_y, num_z, threshold, minx, maxx, miny,
+            maxy, minz, maxz, primitive=primitive)
+
+        print("The difference in volume is %.2f cm3.\n" % volume)
 
     print("Script Finished: %.4f sec" % (time.time() - time_start))
 
