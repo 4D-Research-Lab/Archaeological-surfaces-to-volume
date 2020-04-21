@@ -147,6 +147,7 @@ def print_primitive_size(length, width, height):
     """Print the size of the primitive used."""
     print("Primitive size: %.2f x %.2f x %.2f" % (length, width, height))
 
+
 def print_test_results(prim, vol, obj_vol, vol_dif):
     """Print the test results of one particular object and method."""
     print("Calculated volume for space-oriented %s algorithm: %.4f ("
@@ -263,7 +264,8 @@ def draw_tetrahedra(vertices, rgba):
 
 
 def cast_down_ray(mesh, var, cur, h, dr="x"):
-    """Cast a ray from (x,y,h) or (y,x,h) in direction (dirx, diry, dirz)"""
+    """Cast a ray from (x,y,h) or (y,x,h) in direction (0, 0, -1),
+    straight downwards."""
     if dr == "x":
         result = D.objects[mesh].ray_cast((cur, var, h), (0, 0, -1))
     elif dr == "y":
@@ -368,10 +370,61 @@ def decide_in_volume(upper_mesh, lower_mesh, center, max_distance):
 
 def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
     """Make a list of cartesian points between boundaries."""
+    # Make lists for x, y and z-coordinates that divide up the bounding box.
     xs = np.arange(minx, maxx, l)
     ys = np.arange(miny, maxy, w)
     zs = np.arange(minz, maxz, h)
-    return [(x, y, z) for x in xs for y in ys for z in zs] 
+
+    # Combine the coordinates to 3D Cartesian coordinates.
+    return [(x, y, z) for x in xs for y in ys for z in zs]
+
+
+def process_voxel(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
+                  volume_primitives, vol_primitive):
+    """Determine if voxel is part of the volume or not."""
+    # Initialize volume to zero.
+    volume = 0
+
+    # Determine center of voxel.
+    center = (x+l/2, y+w/2, z+h/2)
+
+    # Decide if voxel is part of the volume.
+    in_volume = decide_in_volume(upper_mesh, lower_mesh, center, max_distance)
+
+    # If the voxel is part of the volume, add it to the primitive list and set
+    # the volume.
+    if in_volume:
+        volume_primitives.append((x, y, z))
+        volume = vol_primitive
+
+    return volume
+
+
+def process_tetra(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
+                  volume_primitives, vol_primitive):
+    """Determine if tetra is part of the volume or not."""
+    # Initialize volume to zero.
+    volume = 0
+
+    # Get all vertices for the 6 tetrahedra.
+    v1, v2 = (x, y, z), (x + l, y + w, z + h)
+    other_vs = [(x+l, y, z), (x+l, y+w, z), (x, y+w, z), (x, y+w, z+h),
+                (x, y, z+h), (x+l, y, z+h), (x+l, y, z)]
+    for v3, v4 in zip(other_vs[:-1], other_vs[1:]):
+        # Determine center of tetrahedron.
+        center = center_tetrahedron(v1, v2, v3, v4)
+
+        # Decide if the tetrahedron is part of the volume.
+        in_volume = decide_in_volume(upper_mesh, lower_mesh, center,
+                                     max_distance)
+
+        # If the tetrahedron is part of the volume, add it to the primitive
+        # list and add its volume to the volume variable.
+        if in_volume:
+            volume_primitives.append((v1, v2, v3, v4))
+            volume += vol_primitive
+
+    return volume
 
 
 def space_oriented_volume_between_meshes(
@@ -386,8 +439,7 @@ def space_oriented_volume_between_meshes(
     # Reduce the bounding box, if it is not a test.
     if not test:
         minx, maxx, miny, maxy = reduce_boundingbox(
-            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy,
-            maxz)
+            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
 
     # Determine primitive size
     l, w, h = ((maxx - minx) / num_x, (maxy - miny) / num_y,
@@ -401,31 +453,16 @@ def space_oriented_volume_between_meshes(
 
     for x, y, z in points:
         if primitive == "voxel":
-            # Determine center of voxel.
-            center = (x+l/2, y+w/2, z+h/2)
-
-            # Decide if voxel is part of the volume.
-            in_volume = decide_in_volume(upper_mesh, lower_mesh,
-                                            center, max_distance)
-            if in_volume:
-                volume_primitives.append((x, y, z))
-                cur_volume += vol_primitive
+            # Check if current voxel is part of the volume.
+            cur_volume += process_voxel(
+                x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
+                volume_primitives, vol_primitive)
         elif primitive == "tetra":
-            # Get all vertices for the 6 tetrahedra.
-            v1, v2 = (x, y, z), (x + l, y + w, z + h)
-            other_vs = [(x+l, y, z), (x+l, y+w, z), (x, y+w, z),
-                        (x, y+w, z+h), (x, y, z+h), (x+l, y, z+h),
-                        (x+l, y, z)]
-            for v3, v4 in zip(other_vs[:-1], other_vs[1:]):
-                # Determine center of tetrahedron.
-                center = center_tetrahedron(v1, v2, v3, v4)
-
-                # Decide if the tetrahedron is part of the volume.
-                in_volume = decide_in_volume(upper_mesh, lower_mesh,
-                                                center, max_distance)
-                if in_volume:
-                    volume_primitives.append((v1, v2, v3, v4))
-                    cur_volume += vol_primitive
+            # Check which tetrahedra in the current voxel are part of the
+            # volume.
+            cur_volume += process_tetra(
+                x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
+                volume_primitives, vol_primitive)
 
     return cur_volume, l, w, h, volume_primitives
 
@@ -433,7 +470,7 @@ def space_oriented_volume_between_meshes(
 def space_oriented_algorithm(
         meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
         maxz, primitive="voxel", test=False):
-    """Space-oriented algorithm to make a 3D model out of 2 trianglar
+    """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
     tot_volume = 0
@@ -463,7 +500,59 @@ def space_oriented_algorithm(
     return tot_volume
 
 
-def vol_test(num_x, num_y, num_z, threshold, methods=["tetra"]):
+def object_oriented_algorithm(
+        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
+        maxz, test=False):
+    """Object-oriented algorithm to make a 3D model out of multiple triangular
+    meshes."""
+    tot_volume = 0
+    max_distance = maxz - minz
+
+    # For all ordered mesh pairs from top to bottom, run the space-oriented
+    # algorithm to get volume and list of primitives.
+    for upper_mesh, lower_mesh in zip(meshes[:-1], meshes[1:]):
+        minx, maxx, miny, maxy = reduce_boundingbox(
+            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
+
+        g_count, b_count = 0, 0
+
+        for v in D.objects[lower_mesh].data.vertices:
+            if v.co[0] < minx or v.co[0] > maxx or v.co[1] < miny or v.co[1] > maxy:
+                continue
+
+            ray_up = D.objects[upper_mesh].ray_cast(v.co, (0, 0, 1), distance=max_distance)
+            if ray_up[0] and dist_btwn_pts(ray_up[1], v.co) > 0.1:
+                g_count += 1
+                print("This is a good vertex!")
+            else:
+                v.select = True
+                # D.meshes[lower_mesh].vertices.remove(v)
+                # D.objects[lower_mesh].data.vertices.remove(v)
+                b_count += 1
+                print("This is a bad vertex!")
+    
+    bpy.ops.mesh.delete(type="VERT")
+    print("There are %d good vertices and %d bad vertices!" % (g_count, b_count))
+    return tot_volume
+
+
+def slicer_algotihm(
+        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
+        maxz, test=False):
+    """A slicer algorithm to make a 3D model out of multiple triangular
+    meshes."""
+    pass
+
+
+def liquid_simulation_algorithm(
+        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
+        maxz, test=False):
+    """An algorithm that uses liquid simulation to make a 3D model out of
+    multiple triangular meshes."""
+    pass
+
+
+def vol_test_space_oriented(num_x, num_y, num_z, threshold, methods=["tetra"]):
     """Test the self-made algorithm against Blenders built-in for closed
     meshes. Volumes are here calculated in cm^3."""
     # Set the test objects which are mesh primitives in Blender.
@@ -512,7 +601,8 @@ def main():
     if test:
         # Test all methods specified in the methods list.
         methods = ["tetra"]
-        vol_test(num_x, num_y, num_z, threshold, methods=methods)
+        vol_test_space_oriented(num_x, num_y, num_z, threshold,
+                                methods=methods)
     else:
         # Determine bounding box and translate scene to origin.
         minx, maxx, miny, maxy, minz, maxz = bounding_box()
@@ -524,12 +614,15 @@ def main():
             minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
         print_bbox(minx, maxx, miny, maxy, minz, maxz)
-
-        # Run the space-oriented algorithm with the assigned primitive.
-        primitive = "tetra"
-        volume = space_oriented_algorithm(
+        
+        volume = object_oriented_algorithm(
             ordered_meshes(), num_x, num_y, num_z, threshold, minx, maxx, miny,
-            maxy, minz, maxz, primitive=primitive)
+            maxy, minz, maxz)
+        # # Run the space-oriented algorithm with the assigned primitive.
+        # primitive = "tetra"
+        # volume = space_oriented_algorithm(
+        #     ordered_meshes(), num_x, num_y, num_z, threshold, minx, maxx, miny,
+        #     maxy, minz, maxz, primitive=primitive)
 
         print_total_volume(volume)
 
