@@ -13,10 +13,10 @@ import numpy as np
 
 C = bpy.context
 D = bpy.data
-# FILE_NAMES = ["Halos_trench_Original_Surface(rough).obj",
-            #   "Halos_trench_20191007.obj"]
+FILE_NAMES = ["Halos_trench_Original_Surface(rough).obj",
+              "Halos_trench_20191007.obj"]
 
-FILE_NAMES = ["Halos_trench_20191007.obj", "Halos_trench_20191507.obj"]
+# FILE_NAMES = ["Halos_trench_20191007.obj", "Halos_trench_20191507.obj"]
 # FILE_NAMES = ["Halos_trench_20191007.obj", "Halos_trench_20191507.obj",
 #               "Halos_trench_20191907.obj",
 #               "Halos_trench_Original_Surface(rough).obj"]
@@ -58,8 +58,12 @@ def init(test):
 
 def clear_scene():
     """Removing the initial cube, camera and light"""
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.object.delete()
+    if C.active_object != None and C.active_object.mode == 'EDIT':
+        bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+
+    for obj in D.objects:
+        D.objects.remove(obj, do_unlink=True)
+
     for m in D.meshes:
         D.meshes.remove(m)
 
@@ -492,10 +496,11 @@ def space_oriented_algorithm(
         tot_volume += volume
 
         # Draw the 3D model based on the type of primitive.
-        if primitive == "voxel":
-            draw_cubes(vol_prims, l, w, h, RGBAS[upper_mesh])
-        elif primitive == "tetra":
-            draw_tetrahedra(vol_prims, RGBAS[upper_mesh])
+        if not test:
+            if primitive == "voxel":
+                draw_cubes(vol_prims, l, w, h, RGBAS[upper_mesh])
+            elif primitive == "tetra":
+                draw_tetrahedra(vol_prims, RGBAS[upper_mesh])
 
     return tot_volume
 
@@ -515,23 +520,39 @@ def object_oriented_algorithm(
             upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
 
         g_count, b_count = 0, 0
+        del_verts = []
 
-        for v in D.objects[lower_mesh].data.vertices:
+        # Link upper mesh to scene, make it active and set it to edit mode.
+        obj = D.objects[upper_mesh]
+        C.scene.collection.objects.link(obj)
+        C.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        
+        # Make a bmesh object from the actice mesh.
+        me = obj.data
+        bm = bmesh.from_edit_mesh(me)
+       
+        # For every vertex in the mesh, add it to the del_vertex list if it is
+        # close to other mesh. 
+        for v in bm.verts:
             if v.co[0] < minx or v.co[0] > maxx or v.co[1] < miny or v.co[1] > maxy:
+                b_count += 1
+                del_verts.append(v)
                 continue
 
-            ray_up = D.objects[upper_mesh].ray_cast(v.co, (0, 0, 1), distance=max_distance)
-            if ray_up[0] and dist_btwn_pts(ray_up[1], v.co) > 0.1:
+            ray_down = D.objects[lower_mesh].ray_cast(v.co, (0, 0, -1), distance=max_distance)
+            if ray_down[0] and dist_btwn_pts(ray_down[1], v.co) > 0.1:
                 g_count += 1
                 print("This is a good vertex!")
             else:
-                v.select = True
-                # D.meshes[lower_mesh].vertices.remove(v)
-                # D.objects[lower_mesh].data.vertices.remove(v)
                 b_count += 1
+                del_verts.append(v)
                 print("This is a bad vertex!")
-    
-    bpy.ops.mesh.delete(type="VERT")
+
+        # Delete all vertices in the del_verts list and update the mesh.
+        bmesh.ops.delete(bm, geom=del_verts, context="VERTS")
+        bmesh.update_edit_mesh(me)
+
     print("There are %d good vertices and %d bad vertices!" % (g_count, b_count))
     return tot_volume
 
