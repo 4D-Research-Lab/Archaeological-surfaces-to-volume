@@ -13,66 +13,43 @@ import numpy as np
 
 C = bpy.context
 D = bpy.data
-FILE_NAMES = ["Halos_trench_Original_Surface(rough).obj",
-              "Halos_trench_20191007.obj"]
 
-# FILE_NAMES = ["Halos_trench_20191007.obj", "Halos_trench_20191507.obj"]
-# FILE_NAMES = ["Halos_trench_20191007.obj", "Halos_trench_20191507.obj",
-#               "Halos_trench_20191907.obj",
-#               "Halos_trench_Original_Surface(rough).obj"]
-            #   "Halos_trench_20181907_63.obj"]
-PATH_TO_DIR = "/home/bram/Documents/Scriptie/dataset_2/"
 RED = (1, 0, 0, 1)
 GREEN = (0, 1, 0, 1)
 BLUE = (0, 0, 1, 1)
 GREY = (0.5, 0.5, 0.5, 1)
 BLACK = (0, 0, 0, 1)
 WHITE = (1, 1, 1, 1)
-RGBAS = [RED, GREEN, BLUE, GREY, BLACK, WHITE]
-MONKEY = bpy.ops.mesh.primitive_monkey_add
-TORUS = bpy.ops.mesh.primitive_torus_add
-CYL = bpy.ops.mesh.primitive_cylinder_add
-CONE = bpy.ops.mesh.primitive_cone_add
-CUBE = bpy.ops.mesh.primitive_cube_add
-UVSPHERE = bpy.ops.mesh.primitive_uv_sphere_add
-ICOSPHERE = bpy.ops.mesh.primitive_ico_sphere_add
-B_DIAMOND = bpy.ops.mesh.primitive_brilliant_add
-TEAPOT = bpy.ops.mesh.primitive_teapot_add
-TORUSKNOT = bpy.ops.mesh.primitive_torusknot_add
-STAR = bpy.ops.mesh.primitive_star_add
-TETRA = bpy.ops.mesh.primitive_solid_add
-TEST_VOLS = {"mo": 2255372.6832, "to": 1174735.7603, "cy": 6242890.2415,
-             "co": 2080963.4138, "cu": 8000000, "uv": 4121941.1484,
-             "ic": 3658712.0869, "tk": 20238706.8905, "st": 734731.5605,
-             "te": 513200.2638, "tp": 25297666.767, "bd": 1638237.8412}
+RGBAS = [RED, GREEN, BLUE, BLACK, WHITE, GREY]
 
 
-def init(test):
+def init(test=False):
     """Initialize the scene by removing the cube, camera and light and import
     and orientate the trench objects."""
-    clear_scene()
-    if not test:
-        import_objects()
+    if test:
+        clear_scene()
+    else:
+        remove_volumes()
         rotate_objects()
 
 
-def clear_scene():
-    """Removing the initial cube, camera and light"""
-    if C.active_object != None and C.active_object.mode == 'EDIT':
-        bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
+def remove_volumes():
+    """Remove the generated volumes from the last script run."""
+    for m in D.meshes:
+        if m.name.startswith("cubic") or m.name.startswith("tetra"):
+            D.meshes.remove(m)
 
-    for obj in D.objects:
-        D.objects.remove(obj, do_unlink=True)
+
+def clear_scene():
+    """Clear the scene from all objects."""
+    if C.active_object is not None and C.active_object.mode == 'EDIT':
+        bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
 
     for m in D.meshes:
         D.meshes.remove(m)
 
-
-def import_objects():
-    """Import the objects for which the volume has to be calculated."""
-    for name in FILE_NAMES:
-        file_path = "".join([PATH_TO_DIR, name])
-        bpy.ops.import_scene.obj(filepath=file_path)
+    for obj in D.objects:
+        D.objects.remove(obj, do_unlink=True)
 
 
 def rotate_objects():
@@ -81,11 +58,16 @@ def rotate_objects():
         name.rotation_euler = (0.0, 0.0, 0.0)
 
 
-def bounding_box():
+def bounding_box(name=None):
     """Find the minimum and maximum x, y and z-coordinates."""
     min_x = min_y = min_z = math.inf
     max_x = max_y = max_z = -math.inf
-    for obj in bpy.data.meshes:
+    if name:
+        obj_list = [D.meshes[name]]
+    else:
+        obj_list = D.meshes
+
+    for obj in obj_list:
         for v in obj.vertices:
             if v.co[0] < min_x:
                 min_x = v.co[0]
@@ -152,12 +134,11 @@ def print_primitive_size(length, width, height):
     print("Primitive size: %.2f x %.2f x %.2f" % (length, width, height))
 
 
-def print_test_results(prim, vol, obj_vol, vol_dif):
-    """Print the test results of one particular object and method."""
-    print("Calculated volume for space-oriented %s algorithm: %.4f ("
-          "exact volume is %.4f)" % (prim, vol, obj_vol))
-    print("The difference is thus %.4f or %.2f percent" %
-          (vol_dif, 100 * vol_dif / vol))
+def print_layer_volume(test, volume):
+    """Print the layer volume only if it is not a test run."""
+    if not test:
+        print("This layer has a volume of %.2f cm3 or %.2f m3" %
+              (volume, volume / 1000000))
 
 
 def ordered_meshes():
@@ -197,14 +178,14 @@ def make_voxel_verts(origin, length, width, height):
     return [v0, v1, v2, v3, v4, v5, v6, v7]
 
 
-def make_voxel_faces():
+def make_voxel_faces(i):
     """Make a list of faces for given vertices of a cube."""
-    f1 = (0, 1, 3, 2)
-    f2 = (4, 5, 7, 6)
-    f3 = (0, 2, 6, 4)
-    f4 = (1, 3, 7, 5)
-    f5 = (0, 1, 5, 4)
-    f6 = (2, 3, 7, 6)
+    f1 = (i, i + 1, i + 3, i + 2)
+    f2 = (i + 4, i + 5, i + 7, i + 6)
+    f3 = (i, i + 2, i + 6, i + 4)
+    f4 = (i + 1, i + 3, i + 7, i + 5)
+    f5 = (i, i + 1, i + 5, i + 4)
+    f6 = (i + 2, i + 3, i + 7, i + 6)
     return [f1, f2, f3, f4, f5, f6]
 
 
@@ -212,59 +193,82 @@ def draw_cubes(origins, length, width, height, rgba):
     """Draw cubes from given origins, size and color"""
     # Specify the color and faces for the new meshes.
     color = D.materials.new("Layer_color")
-    faces = make_voxel_faces()
+    index = 0
+    verts, faces = [], []
 
     for o in origins:
         # Make the vertices of the new mesh.
-        verts = make_voxel_verts(o, length, width, height)
+        vs = make_voxel_verts(o, length, width, height)
+        verts.extend(vs)
+        faces.extend(make_voxel_faces(index))
+        index += 8
 
-        # Create a new mesh.
-        mesh = D.meshes.new("cube")
-        mesh.from_pydata(verts, [], faces)
-        mesh.validate()
-        mesh.update()
+    # Create a new mesh.
+    mesh = D.meshes.new("cubic_volume")
+    mesh.from_pydata(verts, [], faces)
+    mesh.validate()
+    mesh.update()
 
-        # Create new object and give it data.
-        new_object = D.objects.new("cube", mesh)
-        new_object.data = mesh
+    # Create new object and give it data.
+    new_object = D.objects.new("cubic_volume", mesh)
+    new_object.data = mesh
 
-        # Put object in the scene.
-        C.collection.objects.link(new_object)
-        C.view_layer.objects.active = new_object
-        new_object.select_set(True)
+    # Put object in the scene.
+    C.collection.objects.link(new_object)
+    C.view_layer.objects.active = new_object
+    new_object.select_set(True)
 
-        # Give the object the color rgba and deselect it.
-        C.active_object.data.materials.append(color)
-        C.object.active_material.diffuse_color = rgba
-        new_object.select_set(False)
+    # Give the object the color rgba and deselect it.
+    C.active_object.data.materials.append(color)
+    C.object.active_material.diffuse_color = rgba
+    new_object.select_set(False)
+
+
+def make_tetra_faces(i):
+    """Return a list of 4 faces based on the vertex index."""
+    f1 = (i, i + 1, i + 2)
+    f2 = (i, i + 1, i + 3)
+    f3 = (i, i + 2, i + 3)
+    f4 = (i + 1, i + 2, i + 3)
+    return [f1, f2, f3, f4]
 
 
 def draw_tetrahedra(vertices, rgba):
     """Draw tetrahedra from given vertices and color."""
     # Specify the color and faces for the new meshes.
     color = D.materials.new("Layer_color")
-    faces = [(0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)]
 
-    for verts in vertices:
-        # Create new mesh structure.
-        mesh = D.meshes.new("tetrahedron")
-        mesh.from_pydata(verts, [], faces)
-        mesh.validate()
-        mesh.update()
+    verts, faces = [], []
+    index = 0
 
-        # Create new object and give it data.
-        new_object = D.objects.new("tetrahedron", mesh)
-        new_object.data = mesh
+    # TODO: check if vertex already in list. If so get its index and give it
+    # to make_faces function --> Is slower!!!
+    for vs in vertices:
+        # i1, i2, i3, i4 = check_tetra_indices(verts, v1, v2, v3, v4)
+        verts.extend(vs)
+        # add_tetra_faces(faces, i1, i2, i3, i4)
+        faces.extend(make_tetra_faces(index))
+        index += 4
 
-        # Put object in the scene.
-        C.collection.objects.link(new_object)
-        C.view_layer.objects.active = new_object
-        new_object.select_set(True)
+    # Create new mesh structure.
+    mesh = D.meshes.new("tetrahedron_volume")
+    mesh.from_pydata(verts, [], faces)
+    mesh.validate()
+    mesh.update()
 
-        # Give the object the color rgba and deselect it.
-        C.active_object.data.materials.append(color)
-        C.object.active_material.diffuse_color = rgba
-        new_object.select_set(False)
+    # Create new object and give it data.
+    new_object = D.objects.new("tetrahedron_volume", mesh)
+    new_object.data = mesh
+
+    # Put object in the scene.
+    C.collection.objects.link(new_object)
+    C.view_layer.objects.active = new_object
+    new_object.select_set(True)
+
+    # Give the object the color rgba and deselect it.
+    C.active_object.data.materials.append(color)
+    C.object.active_material.diffuse_color = rgba
+    new_object.select_set(False)
 
 
 def cast_down_ray(mesh, var, cur, h, dr="x"):
@@ -354,7 +358,7 @@ def set_vol_primitive(length, width, height, primitive="voxel"):
     return vol_primitive
 
 
-def decide_in_volume(upper_mesh, lower_mesh, center, max_distance):
+def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold):
     """Decide if the primitive on the given position belongs to the volume
     between the meshes."""
     # Cast ray up to upper mesh and ray down to lower mesh.
@@ -364,7 +368,8 @@ def decide_in_volume(upper_mesh, lower_mesh, center, max_distance):
         center, (0, 0, -1), distance=max_distance)
 
     # If both rays hit the mesh, centroid is in between the meshes.
-    if (res_up[0] and res_down[0]):
+    if (res_up[0] and res_down[0] and
+            dist_btwn_pts(res_up[1], res_down[1]) >= threshold):
         in_volume = True
     else:
         in_volume = False
@@ -375,16 +380,16 @@ def decide_in_volume(upper_mesh, lower_mesh, center, max_distance):
 def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
     """Make a list of cartesian points between boundaries."""
     # Make lists for x, y and z-coordinates that divide up the bounding box.
-    xs = np.arange(minx, maxx, l)
-    ys = np.arange(miny, maxy, w)
-    zs = np.arange(minz, maxz, h)
+    xs = np.arange(minx, maxx + l, l)
+    ys = np.arange(miny, maxy + w, w)
+    zs = np.arange(minz, maxz + h, h)
 
     # Combine the coordinates to 3D Cartesian coordinates.
     return [(x, y, z) for x in xs for y in ys for z in zs]
 
 
 def process_voxel(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                  volume_primitives, vol_primitive):
+                  volume_primitives, vol_primitive, threshold):
     """Determine if voxel is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -393,7 +398,8 @@ def process_voxel(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
     center = (x+l/2, y+w/2, z+h/2)
 
     # Decide if voxel is part of the volume.
-    in_volume = decide_in_volume(upper_mesh, lower_mesh, center, max_distance)
+    in_volume = decide_in_volume(upper_mesh, lower_mesh, center, max_distance,
+                                 threshold)
 
     # If the voxel is part of the volume, add it to the primitive list and set
     # the volume.
@@ -405,7 +411,7 @@ def process_voxel(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
 
 
 def process_tetra(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                  volume_primitives, vol_primitive):
+                  volume_primitives, vol_primitive, threshold):
     """Determine if tetra is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -420,7 +426,7 @@ def process_tetra(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
 
         # Decide if the tetrahedron is part of the volume.
         in_volume = decide_in_volume(upper_mesh, lower_mesh, center,
-                                     max_distance)
+                                     max_distance, threshold)
 
         # If the tetrahedron is part of the volume, add it to the primitive
         # list and add its volume to the volume variable.
@@ -432,22 +438,16 @@ def process_tetra(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
 
 
 def space_oriented_volume_between_meshes(
-        num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz, maxz,
-        upper_mesh, lower_mesh, max_distance,  primitive="voxel", test=False):
+        length, width, height, threshold, minx, maxx, miny, maxy, minz, maxz,
+        upper_mesh, lower_mesh, max_distance,  primitive="voxel"):
     """Calculate the volume and make a 3D model of the volume between 2
     meshes."""
     # Initialize volume primitives list and the volume.
     volume_primitives = []
     cur_volume = 0
 
-    # Reduce the bounding box, if it is not a test.
-    if not test:
-        minx, maxx, miny, maxy = reduce_boundingbox(
-            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
-
     # Determine primitive size
-    l, w, h = ((maxx - minx) / num_x, (maxy - miny) / num_y,
-               (maxz - minz) / num_z)
+    l, w, h = length, width, height
 
     # Set volume of the primitive used.
     vol_primitive = set_vol_primitive(l, w, h, primitive=primitive)
@@ -460,20 +460,20 @@ def space_oriented_volume_between_meshes(
             # Check if current voxel is part of the volume.
             cur_volume += process_voxel(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive)
+                volume_primitives, vol_primitive, threshold)
         elif primitive == "tetra":
             # Check which tetrahedra in the current voxel are part of the
             # volume.
             cur_volume += process_tetra(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive)
+                volume_primitives, vol_primitive, threshold)
 
-    return cur_volume, l, w, h, volume_primitives
+    return cur_volume, volume_primitives
 
 
 def space_oriented_algorithm(
-        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
-        maxz, primitive="voxel", test=False):
+        meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
+        maxz, primitive="voxel", draw=True, test=False):
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
@@ -484,25 +484,71 @@ def space_oriented_algorithm(
     # algorithm to get volume and list of primitives.
     for upper_mesh, lower_mesh in zip(meshes[:-1], meshes[1:]):
         # Execute space-oriented algorithm between 2 meshes.
-        volume, l, w, h, vol_prims = space_oriented_volume_between_meshes(
-            num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz, maxz,
-            upper_mesh, lower_mesh, max_distance, primitive=primitive,
-            test=test)
+        volume, vol_prims = space_oriented_volume_between_meshes(
+            length, width, height, threshold, minx, maxx, miny, maxy, minz,
+            maxz, upper_mesh, lower_mesh, max_distance, primitive=primitive)
 
         # Print the size of the primitives used.
-        print_primitive_size(l, w, h)
+        print_layer_volume(test, volume)
 
         # Update total volume.
         tot_volume += volume
 
-        # Draw the 3D model based on the type of primitive.
-        if not test:
+        # Draw the 3D model based on the type of primitive if it is not a test.
+        if draw:
             if primitive == "voxel":
-                draw_cubes(vol_prims, l, w, h, RGBAS[upper_mesh])
+                draw_cubes(vol_prims, length, width, height,
+                           RGBAS[lower_mesh % len(RGBAS)])
             elif primitive == "tetra":
-                draw_tetrahedra(vol_prims, RGBAS[upper_mesh])
+                draw_tetrahedra(vol_prims, RGBAS[lower_mesh % len(RGBAS)])
 
     return tot_volume
+
+
+def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
+             max_distance, dr="down"):
+    """Remove vertices that are too close to the other mesh."""
+    del_verts = []
+
+    # Link upper mesh to scene, make it active and set it to edit mode.
+    obj = D.objects[upper_mesh]
+    # C.scene.collection.objects.link(obj)
+    C.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode="EDIT")
+
+    # Make a bmesh object from the actice mesh.
+    me = obj.data
+    bm = bmesh.from_edit_mesh(me)
+
+    # For every vertex in the mesh, add it to the del_vertex list if it is
+    # close to other mesh.
+    for v in bm.verts:
+        if (v.co[0] < minx or v.co[0] > maxx or v.co[1] < miny or
+                v.co[1] > maxy):
+            # b_count += 1
+            del_verts.append(v)
+            continue
+
+        if dr == "down":
+            ray_shot = D.objects[lower_mesh].ray_cast(v.co, (0, 0, -1),
+                                                      distance=max_distance)
+        else:
+            ray_shot = D.objects[lower_mesh].ray_cast(v.co, (0, 0, 1),
+                                                      distance=max_distance)
+
+        if ray_shot[0] and dist_btwn_pts(ray_shot[1], v.co) >= threshold:
+            continue
+            # g_count += 1
+            # print("This is a good vertex!")
+        else:
+            # b_count += 1
+            del_verts.append(v)
+            # print("This is a bad vertex!")
+
+    # Delete all vertices in the del_verts list and update the mesh.
+    bmesh.ops.delete(bm, geom=del_verts, context="VERTS")
+    bmesh.update_edit_mesh(me)
+    bpy.ops.object.mode_set(mode="OBJECT")
 
 
 def object_oriented_algorithm(
@@ -519,41 +565,13 @@ def object_oriented_algorithm(
         minx, maxx, miny, maxy = reduce_boundingbox(
             upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
 
-        g_count, b_count = 0, 0
-        del_verts = []
+        cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
+                 max_distance, dr="down")
+        cut_mesh(minx, maxx, miny, maxy, lower_mesh, upper_mesh, threshold,
+                 max_distance, dr="up")
 
-        # Link upper mesh to scene, make it active and set it to edit mode.
-        obj = D.objects[upper_mesh]
-        C.scene.collection.objects.link(obj)
-        C.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode="EDIT")
-        
-        # Make a bmesh object from the actice mesh.
-        me = obj.data
-        bm = bmesh.from_edit_mesh(me)
-       
-        # For every vertex in the mesh, add it to the del_vertex list if it is
-        # close to other mesh. 
-        for v in bm.verts:
-            if v.co[0] < minx or v.co[0] > maxx or v.co[1] < miny or v.co[1] > maxy:
-                b_count += 1
-                del_verts.append(v)
-                continue
-
-            ray_down = D.objects[lower_mesh].ray_cast(v.co, (0, 0, -1), distance=max_distance)
-            if ray_down[0] and dist_btwn_pts(ray_down[1], v.co) > 0.1:
-                g_count += 1
-                print("This is a good vertex!")
-            else:
-                b_count += 1
-                del_verts.append(v)
-                print("This is a bad vertex!")
-
-        # Delete all vertices in the del_verts list and update the mesh.
-        bmesh.ops.delete(bm, geom=del_verts, context="VERTS")
-        bmesh.update_edit_mesh(me)
-
-    print("There are %d good vertices and %d bad vertices!" % (g_count, b_count))
+    # print("There are %d good vertices and %d bad vertices!" %
+        #   (g_count, b_count))
     return tot_volume
 
 
@@ -573,79 +591,45 @@ def liquid_simulation_algorithm(
     pass
 
 
-def vol_test_space_oriented(num_x, num_y, num_z, threshold, methods=["tetra"]):
-    """Test the self-made algorithm against Blenders built-in for closed
-    meshes. Volumes are here calculated in cm^3."""
-    # Set the test objects which are mesh primitives in Blender.
-    object_list = [
-        ("mo", MONKEY), ("to", TORUS), ("cy", CYL), ("co", CONE), ("cu", CUBE),
-        ("uv", UVSPHERE), ("ic", ICOSPHERE), ("bd", B_DIAMOND), ("tp", TEAPOT),
-        ("tk", TORUSKNOT), ("st", STAR), ("te", TETRA)]
-
-    for prim in methods:
-        for name, obj in object_list:
-            # Create the object and get its volume.
-            obj()
-            obj_vol = TEST_VOLS[name]
-
-            minx, maxx, miny, maxy, minz, maxz = bounding_box()
-
-            # Run the space-oriented algorithm with primitive prim.
-            vol = space_oriented_algorithm(
-                [0, 0], num_x, num_y, num_z, threshold, minx, maxx, miny, maxy,
-                minz, maxz, primitive=prim, test=True)
-            vol_dif = abs(obj_vol - vol)
-
-            # Print the results.
-            print_test_results(prim, vol, obj_vol, vol_dif)
-
-            clear_scene()
-
-        print()
-
-
 def main():
     """Execute the script."""
     time_start = time.time()
 
-    # Test the different methods.
-    test = False
-    init(test)
+    init()
 
-    # Set info about threshold for reducing the bounding box.
+    # Set info about threshold (in m) for reducing the bounding box.
     threshold = 0.05
 
     # Set number of primitives to divide the bounding box.
-    num_x, num_y, num_z = 10, 10, 10
-    print_num_primitives(num_x, num_y, num_z)
+    # num_x, num_y, num_z = 150, 150, 50
 
-    if test:
-        # Test all methods specified in the methods list.
-        methods = ["tetra"]
-        vol_test_space_oriented(num_x, num_y, num_z, threshold,
-                                methods=methods)
-    else:
-        # Determine bounding box and translate scene to origin.
-        minx, maxx, miny, maxy, minz, maxz = bounding_box()
-        difx, dify, difz = translate_to_origin(minx, maxx, miny, maxy, minz,
-                                               maxz)
+    # Size in meters for the primitives.
+    length, width, height = 0.05, 0.05, 0.05
+    print_primitive_size(length, width, height)
+    # TODO: sizes instead of amount of primitives.
+    # print_num_primitives(num_x, num_y, num_z)
 
-        # Update the new minimum and maximum coordinates.
-        minx, maxx, miny, maxy, minz, maxz = update_minmax(
-            minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
+    # Determine bounding box and translate scene to origin.
+    minx, maxx, miny, maxy, minz, maxz = bounding_box()
+    difx, dify, difz = translate_to_origin(minx, maxx, miny, maxy, minz,
+                                           maxz)
 
-        print_bbox(minx, maxx, miny, maxy, minz, maxz)
-        
-        volume = object_oriented_algorithm(
-            ordered_meshes(), num_x, num_y, num_z, threshold, minx, maxx, miny,
-            maxy, minz, maxz)
-        # # Run the space-oriented algorithm with the assigned primitive.
-        # primitive = "tetra"
-        # volume = space_oriented_algorithm(
-        #     ordered_meshes(), num_x, num_y, num_z, threshold, minx, maxx, miny,
-        #     maxy, minz, maxz, primitive=primitive)
+    # Update the new minimum and maximum coordinates.
+    minx, maxx, miny, maxy, minz, maxz = update_minmax(
+        minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-        print_total_volume(volume)
+    print_bbox(minx, maxx, miny, maxy, minz, maxz)
+
+    # volume = object_oriented_algorithm(
+    #     ordered_meshes(), num_x, num_y, num_z, threshold, minx, maxx, miny,
+    #     maxy, minz, maxz)
+    # # Run the space-oriented algorithm with the assigned primitive.
+    primitive = "voxel"
+    volume = space_oriented_algorithm(
+        ordered_meshes(), length, width, height, threshold, minx, maxx, miny,
+        maxy, minz, maxz, primitive=primitive)
+
+    print_total_volume(volume)
 
     print("Script Finished: %.4f sec" % (time.time() - time_start))
 
