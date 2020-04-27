@@ -17,10 +17,14 @@ D = bpy.data
 RED = (1, 0, 0, 1)
 GREEN = (0, 1, 0, 1)
 BLUE = (0, 0, 1, 1)
+YELLOW = (1, 1, 0, 1)
+ORANGE = (1, 0.5, 0, 1)
+PURPLE = (0.5, 0, 1, 1)
+PINK = (1, 0.4, 1, 1)
 GREY = (0.5, 0.5, 0.5, 1)
 BLACK = (0, 0, 0, 1)
 WHITE = (1, 1, 1, 1)
-RGBAS = [RED, GREEN, BLUE, BLACK, WHITE, GREY]
+RGBAS = [RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, PINK, BLACK, WHITE, GREY]
 
 
 def init(test=False):
@@ -154,7 +158,7 @@ def ordered_meshes():
 
 
 def dist_btwn_pts(p1, p2):
-    """Calculate the distance between 2 points in 3D space"""
+    """Calculate the distance between 2 points in 3D space."""
     x_dif, y_dif, z_dif = p1[0] - p2[0], p1[1] - p2[1], p1[2] - p2[2]
     return math.sqrt(x_dif**2 + y_dif**2 + z_dif**2)
 
@@ -241,12 +245,8 @@ def draw_tetrahedra(vertices, rgba):
     verts, faces = [], []
     index = 0
 
-    # TODO: check if vertex already in list. If so get its index and give it
-    # to make_faces function --> Is slower!!!
     for vs in vertices:
-        # i1, i2, i3, i4 = check_tetra_indices(verts, v1, v2, v3, v4)
         verts.extend(vs)
-        # add_tetra_faces(faces, i1, i2, i3, i4)
         faces.extend(make_tetra_faces(index))
         index += 4
 
@@ -348,7 +348,7 @@ def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
     return minx, maxx, miny, maxy
 
 
-def set_vol_primitive(length, width, height, primitive="voxel"):
+def set_vol_primitive(length, width, height, primitive):
     """Calculate the volume of the specified primitive in cubic centimetres."""
     if primitive == "voxel":
         vol_primitive = length * width * height * 1000000
@@ -358,9 +358,39 @@ def set_vol_primitive(length, width, height, primitive="voxel"):
     return vol_primitive
 
 
-def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold):
+def check_outside_mesh(upper_mesh, center, max_distance):
+    """Check if center lays outside closed mesh or not."""
+    hit = True
+    hit_count = 0
+    cast_point = center
+    adder = (0, 0, 0.001)
+
+    # Cast rays as long as it hits the mesh. Count the amount of times the ray
+    # hits the mesh.
+    while hit:
+        cast_result = D.objects[upper_mesh].ray_cast(
+            cast_point, (0, 0, 1), distance=max_distance)
+
+        if cast_result[0]:
+            hit_count += 1
+            cast_point = tuple(sum(x) for x in zip(cast_result[1], adder))
+        else:
+            hit = False
+
+    # If there are an even amount of hits, center is not inside the closed
+    # mesh and thus True is returned.
+    return (hit_count % 2) == 0
+
+
+def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold,
+                     closed_mesh):
     """Decide if the primitive on the given position belongs to the volume
     between the meshes."""
+    # TODO: check if point is in the mesh or not by casting rays in point where
+    # the there were hits.
+    if closed_mesh and check_outside_mesh(upper_mesh, center, max_distance):
+        return False
+
     # Cast ray up to upper mesh and ray down to lower mesh.
     res_up = D.objects[upper_mesh].ray_cast(
         center, (0, 0, 1), distance=max_distance)
@@ -388,8 +418,9 @@ def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
     return [(x, y, z) for x in xs for y in ys for z in zs]
 
 
-def process_voxel(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                  volume_primitives, vol_primitive, threshold):
+def process_voxel(
+        x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
+        volume_primitives, vol_primitive, threshold, closed_mesh):
     """Determine if voxel is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -398,8 +429,9 @@ def process_voxel(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
     center = (x+l/2, y+w/2, z+h/2)
 
     # Decide if voxel is part of the volume.
-    in_volume = decide_in_volume(upper_mesh, lower_mesh, center, max_distance,
-                                 threshold)
+    in_volume = decide_in_volume(
+        upper_mesh, lower_mesh, center, max_distance, threshold,
+        closed_mesh)
 
     # If the voxel is part of the volume, add it to the primitive list and set
     # the volume.
@@ -410,8 +442,9 @@ def process_voxel(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
     return volume
 
 
-def process_tetra(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                  volume_primitives, vol_primitive, threshold):
+def process_tetra(
+        x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
+        volume_primitives, vol_primitive, threshold, closed_mesh):
     """Determine if tetra is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -425,8 +458,9 @@ def process_tetra(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
         center = center_tetrahedron(v1, v2, v3, v4)
 
         # Decide if the tetrahedron is part of the volume.
-        in_volume = decide_in_volume(upper_mesh, lower_mesh, center,
-                                     max_distance, threshold)
+        in_volume = decide_in_volume(
+            upper_mesh, lower_mesh, center, max_distance, threshold,
+            closed_mesh)
 
         # If the tetrahedron is part of the volume, add it to the primitive
         # list and add its volume to the volume variable.
@@ -439,7 +473,7 @@ def process_tetra(x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
 
 def space_oriented_volume_between_meshes(
         length, width, height, threshold, minx, maxx, miny, maxy, minz, maxz,
-        upper_mesh, lower_mesh, max_distance,  primitive="voxel"):
+        upper_mesh, lower_mesh, max_distance, primitive, closed_mesh):
     """Calculate the volume and make a 3D model of the volume between 2
     meshes."""
     # Initialize volume primitives list and the volume.
@@ -450,7 +484,7 @@ def space_oriented_volume_between_meshes(
     l, w, h = length, width, height
 
     # Set volume of the primitive used.
-    vol_primitive = set_vol_primitive(l, w, h, primitive=primitive)
+    vol_primitive = set_vol_primitive(l, w, h, primitive)
 
     # Go over every primitive in bounding box space
     points = make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h)
@@ -460,25 +494,27 @@ def space_oriented_volume_between_meshes(
             # Check if current voxel is part of the volume.
             cur_volume += process_voxel(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive, threshold)
+                volume_primitives, vol_primitive, threshold, closed_mesh)
         elif primitive == "tetra":
             # Check which tetrahedra in the current voxel are part of the
             # volume.
             cur_volume += process_tetra(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive, threshold)
+                volume_primitives, vol_primitive, threshold, closed_mesh)
 
     return cur_volume, volume_primitives
 
 
 def space_oriented_algorithm(
         meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
-        maxz, primitive="voxel", draw=True, test=False):
+        maxz, primitive="voxel", draw=True, test=False, closed_mesh=False):
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
     tot_volume = 0
     max_distance = maxz - minz
+    length, width, height = length / 100, width / 100, height / 100
+    threshold /= 100
 
     # For all ordered mesh pairs from top to bottom, run the space-oriented
     # algorithm to get volume and list of primitives.
@@ -486,7 +522,7 @@ def space_oriented_algorithm(
         # Execute space-oriented algorithm between 2 meshes.
         volume, vol_prims = space_oriented_volume_between_meshes(
             length, width, height, threshold, minx, maxx, miny, maxy, minz,
-            maxz, upper_mesh, lower_mesh, max_distance, primitive=primitive)
+            maxz, upper_mesh, lower_mesh, max_distance, primitive, closed_mesh)
 
         # Print the size of the primitives used.
         print_layer_volume(test, volume)
@@ -505,15 +541,61 @@ def space_oriented_algorithm(
     return tot_volume
 
 
+def combine_objects(obj1, obj2):
+    """Combine 2 objects into 1 and remove the 2 objects aftwerwards."""
+    # Make a new bmesh that combines data from obj1 and obj2.
+    combi = bmesh.new()
+    combi.from_mesh(obj1.data)
+    combi.from_mesh(obj2.data)
+
+    # Write data to obj1.
+    combi.to_mesh(obj1.data)
+
+    # Remove obj2 and update view layer.
+    D.meshes.remove(obj2.data)
+    C.view_layer.update()
+
+
+def update_indices(upper_mesh, lower_mesh, prefix_name):
+    """Update the upper- and lower mesh indices, based on the amount of
+    triangle mesh volume objects are created."""
+    volumes_obj_count = 0
+    index = 0
+
+    # Go over all objects.
+    for obj in D.objects:
+        # If object is a generated volume, increment volume objects counter.
+        # Else increment index. If index is the same as upper or lower, set
+        # correct index and return them both.
+        if obj.name.startswith(prefix_name):
+            volumes_obj_count += 1
+        else:
+            if index == upper_mesh:
+                new_up = index + volumes_obj_count
+
+            if index == lower_mesh:
+                new_low = index + volumes_obj_count
+
+            index += 1
+
+    return new_up, new_low
+
+
 def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
              max_distance, dr="down"):
     """Remove vertices that are too close to the other mesh."""
+    prefix_name = "triangle_mesh_volume"
     del_verts = []
+    upper_mesh, lower_mesh = update_indices(upper_mesh, lower_mesh,
+                                            prefix_name)
 
     # Link upper mesh to scene, make it active and set it to edit mode.
-    obj = D.objects[upper_mesh]
-    # C.scene.collection.objects.link(obj)
+    obj = D.objects[upper_mesh].copy()
+    obj.data = D.objects[upper_mesh].data.copy()
+    obj.name = prefix_name
+    C.scene.collection.objects.link(obj)
     C.view_layer.objects.active = obj
+    C.view_layer.update()
     bpy.ops.object.mode_set(mode="EDIT")
 
     # Make a bmesh object from the actice mesh.
@@ -525,7 +607,6 @@ def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
     for v in bm.verts:
         if (v.co[0] < minx or v.co[0] > maxx or v.co[1] < miny or
                 v.co[1] > maxy):
-            # b_count += 1
             del_verts.append(v)
             continue
 
@@ -538,40 +619,36 @@ def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
 
         if ray_shot[0] and dist_btwn_pts(ray_shot[1], v.co) >= threshold:
             continue
-            # g_count += 1
-            # print("This is a good vertex!")
+
         else:
-            # b_count += 1
             del_verts.append(v)
-            # print("This is a bad vertex!")
 
     # Delete all vertices in the del_verts list and update the mesh.
     bmesh.ops.delete(bm, geom=del_verts, context="VERTS")
     bmesh.update_edit_mesh(me)
     bpy.ops.object.mode_set(mode="OBJECT")
+    return obj
 
 
 def object_oriented_algorithm(
-        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
+        meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
         maxz, test=False):
     """Object-oriented algorithm to make a 3D model out of multiple triangular
     meshes."""
     tot_volume = 0
     max_distance = maxz - minz
+    threshold /= 100
 
     # For all ordered mesh pairs from top to bottom, run the space-oriented
     # algorithm to get volume and list of primitives.
     for upper_mesh, lower_mesh in zip(meshes[:-1], meshes[1:]):
-        minx, maxx, miny, maxy = reduce_boundingbox(
-            upper_mesh, lower_mesh, threshold, minx, maxx, miny, maxy, maxz)
+        # TODO: maybe keep all good vertices and add triangle faces.
+        upper = cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh,
+                         threshold, max_distance, dr="down")
+        lower = cut_mesh(minx, maxx, miny, maxy, lower_mesh, upper_mesh,
+                         threshold, max_distance, dr="up")
+        combine_objects(upper, lower)
 
-        cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
-                 max_distance, dr="down")
-        cut_mesh(minx, maxx, miny, maxy, lower_mesh, upper_mesh, threshold,
-                 max_distance, dr="up")
-
-    # print("There are %d good vertices and %d bad vertices!" %
-        #   (g_count, b_count))
     return tot_volume
 
 
@@ -597,17 +674,15 @@ def main():
 
     init()
 
-    # Set info about threshold (in m) for reducing the bounding box.
-    threshold = 0.05
+    # Set info about threshold (in cm) for reducing the bounding box.
+    threshold = 5
 
     # Set number of primitives to divide the bounding box.
     # num_x, num_y, num_z = 150, 150, 50
 
-    # Size in meters for the primitives.
-    length, width, height = 0.05, 0.05, 0.05
+    # Size in centimeters for the primitives.
+    length, width, height = 5, 5, 5
     print_primitive_size(length, width, height)
-    # TODO: sizes instead of amount of primitives.
-    # print_num_primitives(num_x, num_y, num_z)
 
     # Determine bounding box and translate scene to origin.
     minx, maxx, miny, maxy, minz, maxz = bounding_box()
@@ -620,18 +695,18 @@ def main():
 
     print_bbox(minx, maxx, miny, maxy, minz, maxz)
 
-    # volume = object_oriented_algorithm(
-    #     ordered_meshes(), num_x, num_y, num_z, threshold, minx, maxx, miny,
-    #     maxy, minz, maxz)
-    # # Run the space-oriented algorithm with the assigned primitive.
-    primitive = "voxel"
-    volume = space_oriented_algorithm(
+    volume = object_oriented_algorithm(
         ordered_meshes(), length, width, height, threshold, minx, maxx, miny,
-        maxy, minz, maxz, primitive=primitive)
+        maxy, minz, maxz)
+    # # Run the space-oriented algorithm with the assigned primitive.
+    # primitive = "voxel"
+    # volume = space_oriented_algorithm(
+    #     ordered_meshes(), length, width, height, threshold, minx, maxx, miny,
+    #     maxy, minz, maxz, primitive=primitive)
 
     print_total_volume(volume)
 
-    print("Script Finished: %.4f sec" % (time.time() - time_start))
+    print("Script Finished: %.4f sec." % (time.time() - time_start))
 
 
 if __name__ == "__main__":
