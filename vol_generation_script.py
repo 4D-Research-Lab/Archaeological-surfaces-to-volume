@@ -541,12 +541,64 @@ def space_oriented_algorithm(
     return tot_volume
 
 
-def combine_objects(obj1, obj2):
+def find_boundary_vertices(bm):
+    """Return all the vertices that are in the boundary of the object."""
+    return [v for v in bm.verts if v.is_boundary]
+
+
+def find_boundary_edges(bm):
+    """Return all the edges that are in the boundary of the object."""
+    return [e for e in bm.edges if e.is_boundary]
+
+
+def edges_connected(e1, e2):
+    """Checks if 2 edges are connected to each other or not."""
+    return any([v1 == v2 for v1 in e1.verts for v2 in e2.verts])
+ 
+
+def find_edge_loop_pairs(edges):
+    """Find pairs of edge loops that need to be stiched together."""
+    pass
+
+
+def calculate_closed_triangle_mesh_volume(bm):
+    """Calculate the volume of a closed triangle mesh in cubic centimeters."""
+    return bm.calc_volume() * 1000000
+
+
+def check_mesh_closed(bm):
+    """Check if the specified mesh is a closed mesh or manifold."""
+    # bpy.ops.mesh.select_non_manifold()
+    return all([v.is_manifold for v in bm.verts])
+
+
+def make_mesh_manifold(bm):
+    """Make the received mesh manifold."""
+    b_edges = find_boundary_edges(bm)
+    for elem in b_edges[0].link_loops:
+        print(elem) # This is a BMLoop object?
+    print(b_edges[0].link_loops)
+    print(b_edges[0] == b_edges[0]) # This works!
+    print(len(bm.edges), len(b_edges))
+    print(b_edges[:30])
+
+    return bm
+
+
+def process_objects(obj1, obj2):
     """Combine 2 objects into 1 and remove the 2 objects aftwerwards."""
+    volume = 0
+
     # Make a new bmesh that combines data from obj1 and obj2.
     combi = bmesh.new()
     combi.from_mesh(obj1.data)
     combi.from_mesh(obj2.data)
+
+    if check_mesh_closed(combi):
+        volume = calculate_closed_triangle_mesh_volume(combi)
+    else:
+        combi = make_mesh_manifold(combi)
+        # make_mesh_manifold(combi) # TODO: function which makes mesh closed.
 
     # Write data to obj1.
     combi.to_mesh(obj1.data)
@@ -554,6 +606,8 @@ def combine_objects(obj1, obj2):
     # Remove obj2 and update view layer.
     D.meshes.remove(obj2.data)
     C.view_layer.update()
+
+    return volume
 
 
 def update_indices(upper_mesh, lower_mesh, prefix_name):
@@ -581,6 +635,26 @@ def update_indices(upper_mesh, lower_mesh, prefix_name):
     return new_up, new_low
 
 
+def create_object_set_active(mesh_index, prefix_name):
+    """Create a new object and set it active in edit mode."""
+    obj = D.objects[mesh_index].copy()
+    obj.data = D.objects[mesh_index].data.copy()
+    obj.name = prefix_name
+    C.scene.collection.objects.link(obj)
+    C.view_layer.objects.active = obj
+    C.view_layer.update()
+    bpy.ops.object.mode_set(mode="EDIT")
+    return obj
+
+
+def delete_verts_and_update(bm, me, del_verts):
+    """Delete the vertices specified in the list from the bmesh bm and update
+    the mesh me."""
+    bmesh.ops.delete(bm, geom=del_verts, context="VERTS")
+    bmesh.update_edit_mesh(me)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
 def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
              max_distance, dr="down"):
     """Remove vertices that are too close to the other mesh."""
@@ -590,13 +664,7 @@ def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
                                             prefix_name)
 
     # Link upper mesh to scene, make it active and set it to edit mode.
-    obj = D.objects[upper_mesh].copy()
-    obj.data = D.objects[upper_mesh].data.copy()
-    obj.name = prefix_name
-    C.scene.collection.objects.link(obj)
-    C.view_layer.objects.active = obj
-    C.view_layer.update()
-    bpy.ops.object.mode_set(mode="EDIT")
+    obj = create_object_set_active(upper_mesh, prefix_name)
 
     # Make a bmesh object from the actice mesh.
     me = obj.data
@@ -617,22 +685,17 @@ def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
             ray_shot = D.objects[lower_mesh].ray_cast(v.co, (0, 0, 1),
                                                       distance=max_distance)
 
-        if ray_shot[0] and dist_btwn_pts(ray_shot[1], v.co) >= threshold:
-            continue
-
-        else:
+        if (not ray_shot[0] or
+                not dist_btwn_pts(ray_shot[1], v.co) >= threshold):
             del_verts.append(v)
 
     # Delete all vertices in the del_verts list and update the mesh.
-    bmesh.ops.delete(bm, geom=del_verts, context="VERTS")
-    bmesh.update_edit_mesh(me)
-    bpy.ops.object.mode_set(mode="OBJECT")
+    delete_verts_and_update(bm, me, del_verts)
     return obj
 
 
 def object_oriented_algorithm(
-        meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
-        maxz, test=False):
+        meshes, threshold, minx, maxx, miny, maxy, minz, maxz, test=False):
     """Object-oriented algorithm to make a 3D model out of multiple triangular
     meshes."""
     tot_volume = 0
@@ -642,12 +705,11 @@ def object_oriented_algorithm(
     # For all ordered mesh pairs from top to bottom, run the space-oriented
     # algorithm to get volume and list of primitives.
     for upper_mesh, lower_mesh in zip(meshes[:-1], meshes[1:]):
-        # TODO: maybe keep all good vertices and add triangle faces.
         upper = cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh,
                          threshold, max_distance, dr="down")
         lower = cut_mesh(minx, maxx, miny, maxy, lower_mesh, upper_mesh,
                          threshold, max_distance, dr="up")
-        combine_objects(upper, lower)
+        tot_volume += process_objects(upper, lower)
 
     return tot_volume
 
@@ -682,7 +744,7 @@ def main():
 
     # Size in centimeters for the primitives.
     length, width, height = 5, 5, 5
-    print_primitive_size(length, width, height)
+    # print_primitive_size(length, width, height)
 
     # Determine bounding box and translate scene to origin.
     minx, maxx, miny, maxy, minz, maxz = bounding_box()
@@ -696,8 +758,7 @@ def main():
     print_bbox(minx, maxx, miny, maxy, minz, maxz)
 
     volume = object_oriented_algorithm(
-        ordered_meshes(), length, width, height, threshold, minx, maxx, miny,
-        maxy, minz, maxz)
+        ordered_meshes(), threshold, minx, maxx, miny, maxy, minz, maxz)
     # # Run the space-oriented algorithm with the assigned primitive.
     # primitive = "voxel"
     # volume = space_oriented_algorithm(
