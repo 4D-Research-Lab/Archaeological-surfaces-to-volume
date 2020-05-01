@@ -10,6 +10,8 @@ import bmesh
 import time
 import math
 import numpy as np
+import sys
+sys.setrecursionlimit(2500)
 
 C = bpy.context
 D = bpy.data
@@ -37,11 +39,20 @@ def init(test=False):
         rotate_objects()
 
 
+def is_volume(obj):
+    """Check if object is a generated volume or not."""
+    if (obj.name.startswith("triangle_mesh") or 
+            obj.name.startswith("cubic") or obj.name.startswith("tetra")):
+        return True
+    
+    return False
+
+
 def remove_volumes():
     """Remove the generated volumes from the last script run."""
-    for m in D.meshes:
-        if m.name.startswith("cubic") or m.name.startswith("tetra"):
-            D.meshes.remove(m)
+    vols = [obj for obj in D.objects if is_volume(obj)]
+    for vol in vols:
+        D.meshes.remove(vol.data)
 
 
 def clear_scene():
@@ -94,6 +105,9 @@ def translate_to_origin(min_x, max_x, min_y, max_y, min_z, max_z):
     x_trans = -(min_x + (max_x - min_x) / 2)
     y_trans = -(min_y + (max_y - min_y) / 2)
     z_trans = -(min_z + (max_z - min_z) / 2)
+
+    if (x_trans, y_trans, z_trans) == (0, 0, 0):
+        return 0, 0, 0
 
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.transform.translate(value=(x_trans, y_trans, z_trans))
@@ -554,11 +568,48 @@ def find_boundary_edges(bm):
 def edges_connected(e1, e2):
     """Checks if 2 edges are connected to each other or not."""
     return any([v1 == v2 for v1 in e1.verts for v2 in e2.verts])
- 
 
-def find_edge_loop_pairs(edges):
-    """Find pairs of edge loops that need to be stiched together."""
-    pass
+
+def calc_centroid_island(island):
+    """Calculate the centroid of a island by taking average values for x, y and
+    z coordinates."""
+    coordinates = [v.co for v in island]
+    centroid = tuple(map(lambda x: sum(x) / float(len(x)), zip(*coordinates)))
+    return centroid
+
+
+def find_closest_island(centroid, cen_list):
+    """Find element in cen_list that is closest to centroid."""
+    min_dist = math.inf
+    min_index = 0
+    min_cen = (0, 0, 0)
+
+    for (i, c) in cen_list:
+        dist = dist_btwn_pts(centroid, c) # TODO: maybe just between x/y coordinates?
+        if dist < min_dist:
+            min_dist = dist
+            min_index = i
+            min_cen = c
+    
+    return min_index, min_cen
+
+
+def find_mesh_pairs(islands):
+    """Find pairs of vertex rings that need to be stiched together."""
+    centroids = []
+    for i, isle in enumerate(islands):
+        centroids.append((i, calc_centroid_island(isle)))
+    
+    pairs = []
+    not_yet_found = centroids
+    for i, c in centroids:
+        if (i, c) in not_yet_found:
+            not_yet_found.remove((i, c))
+            j, cen = find_closest_island(c, not_yet_found)
+            not_yet_found.remove((j, cen))
+            pairs.append([islands[i], islands[j]])
+
+    return pairs
 
 
 def calculate_closed_triangle_mesh_volume(bm):
@@ -568,21 +619,218 @@ def calculate_closed_triangle_mesh_volume(bm):
 
 def check_mesh_closed(bm):
     """Check if the specified mesh is a closed mesh or manifold."""
-    # bpy.ops.mesh.select_non_manifold()
     return all([v.is_manifold for v in bm.verts])
+
+
+def remove_loose_parts(bm):
+    """Remove loose vertices and edges from the mesh."""
+    loose_verts = [v for v in bm.verts if not v.link_faces]
+    for v in loose_verts:
+        bm.verts.remove(v)
+
+    loose_edges = [e for e in bm.edges if not e.link_faces]
+    for e in loose_edges:
+        bm.edges.remove(e)
+
+
+# This is a function written by batFINGER and can be found here:
+# https://blender.stackexchange.com/questions/75332/how-to-find-the-number-of-loose-parts-with-blenders-python-api
+def walk_island(vert):
+    """Walk all un-tagged linked verts."""
+    vert.tag = True
+    yield(vert)
+    linked_verts = [e.other_vert(vert) for e in vert.link_edges
+            if not e.other_vert(vert).tag]
+
+    for v in linked_verts:
+        if v.tag:
+            continue
+        yield from walk_island(v)
+
+
+# This is a function written by batFINGER and can be found here:
+# https://blender.stackexchange.com/questions/75332/how-to-find-the-number-of-loose-parts-with-blenders-python-api
+def get_islands(bm, verts=[]):
+    """Get islands of vertices given all vertices."""
+    def tag(verts, switch):
+        for v in verts:
+            v.tag = switch
+    tag(bm.verts, True)
+    tag(verts, False)
+    ret = {"islands" : []}
+    verts = set(verts)
+    while verts:
+        v = verts.pop()
+        verts.add(v)
+        island = set(walk_island(v))
+        ret["islands"].append(list(island))
+        tag(island, False) # remove tag = True
+        verts -= island
+    return ret
+
+
+def sort_vert_lists(upper_mesh, lower_mesh, b_edges):
+    """Sort the lists of BMVerts, so that vertices that are physically next to
+    each other, are also next to each other in the list."""
+    # TODO: if 2 verts in a list are connected by edge in b_edges -> next to
+    # each other.
+
+    # TODO: are there duplicate edges in b_edges???
+    up, low = [upper_mesh[0]], [lower_mesh[0]]
+    while len(up) < len(upper_mesh):
+        cur_vert = up[-1]
+        edges = [e.verts for e in b_edges if cur_vert in e.verts]
+        connected = [v for tup in edges for v in tup if v is not cur_vert]
+        print(connected)
+        if len(up) == 1:
+            up.append(connected[0])
+        else:
+            next_vert = [v for v in connected if v is not up[-2]]
+            print(next_vert)
+            up.extend(next_vert)
+
+    print(up)
+
+    while len(low) < len(lower_mesh):
+        cur_vert = low[-1]
+        edges = [e.verts for e in b_edges if cur_vert in e.verts]
+        connected = [v for tup in edges for v in tup if v is not cur_vert]
+        if len(low) == 1:
+            low.append(connected[0])
+        else:
+            next_vert = [v for v in connected if v is not up[-2]]
+            low.extend(next_vert)
+
+    return up, low
+
+
+def jasnom_stitch(upper_mesh, lower_mesh):
+    """Stitch 2 vertex rings together using the JASNOM algorithm."""
+    new_edges, new_faces = [], []
+    first_edges, second_edges = [], []
+    # print(type(upper_mesh)) Just a list of BMVerts
+
+    # TODO: upper_mesh and lower_mesh need to be sorted, so that vertices next
+    # to eachother are also in the list next to eachother. 
+    if len(upper_mesh) >= len(lower_mesh):
+        long_mesh = upper_mesh
+        short_mesh = lower_mesh
+    else:
+        long_mesh = lower_mesh
+        short_mesh = upper_mesh
+    
+    # 1. Loop over longest mesh heen en maak een edge van elke vertex naar de
+    #    dichtsbijzijnde vertex in de loshortwer mesh.
+    # This step works!
+    for i, v in enumerate(long_mesh):
+        min_dist = math.inf
+
+        for j, other_v in enumerate(short_mesh): 
+            cur_dist = dist_btwn_pts(v.co, other_v.co)
+            if cur_dist < min_dist:
+                min_dist = cur_dist
+                min_edge = j
+
+        first_edges.append((i, min_edge))
+
+    # all_edges = first_edges
+    # 2. Loop omgekeerd over de long mesh en maak een edge naar de target
+    #    vertex van de vorige vertex uit de long mesh.
+    # This step does not work.
+    for i, v in reversed(first_edges):
+        new_index = (i + 1) % len(first_edges)
+        second_edges.append((new_index, v))
+        
+    all_edges = list(set(first_edges + second_edges))
+
+    # 3. Loop over short mesh en check of er minstens 1 edge van elke vertex
+    #    naar de andere mesh gaat. Als dat niet zo is, maak een edge naar de
+    #    target vertex van de vorige vertex uit de short mesh.
+    # for i in range(len(short_mesh)):
+    #     if not i in [s for _, s in all_edges]:
+    #         # TODO: add edge from this vertex to prev in upper_mesh
+    #         prevs = [e1 for (e1, e2) in all_edges if e2 == (i - 1) % len(short_mesh)]
+    #         while not prevs:
+    #             i -= 1
+    #             prevs = [e1 for (e1, e2) in all_edges if e2 == (i - 1) % len(short_mesh)]
+            
+    #         all_edges.append((max(prevs), i))
+
+    # print(all_edges)
+
+    new_edges = [(long_mesh[i], short_mesh[j]) for (i, j) in all_edges]
+    new_faces = [] # tuples of 3 BMVerts.
+    # The new edges and faces must be added to the mesh object. 
+    return new_edges, new_faces
 
 
 def make_mesh_manifold(bm):
     """Make the received mesh manifold."""
+    remove_loose_parts(bm)
+    # bm.edges.ensure_lookup_table()
+    # bm.verts.index_update()
+    b_verts = find_boundary_vertices(bm)
     b_edges = find_boundary_edges(bm)
-    for elem in b_edges[0].link_loops:
-        print(elem) # This is a BMLoop object?
-    print(b_edges[0].link_loops)
-    print(b_edges[0] == b_edges[0]) # This works!
-    print(len(bm.edges), len(b_edges))
-    print(b_edges[:30])
 
-    return bm
+    islands = [island for island in get_islands(bm, verts=b_verts)["islands"]]
+    # islands = [[v for v in isle if v.is_boundary] for isle in islands]
+    islands = sorted(islands, key=len, reverse=True)
+
+    # TODO: find pairs of islands and connect them via JASNOM algorithm
+    island_pairs = find_mesh_pairs(islands)
+    # print(island_pairs[3])
+
+    new_edges, new_faces = [], []
+    # for upper_mesh, lower_mesh in island_pairs[0]:
+    for [upper_mesh, lower_mesh] in island_pairs[:1]:
+        upper_mesh, lower_mesh = sort_vert_lists(upper_mesh, lower_mesh, b_edges)
+        # upper_mesh = pair[0]
+        # lower_mesh = pair[1]
+        # print(len(upper_mesh))
+        # print(len(lower_mesh))
+        edge_list, face_list = jasnom_stitch(upper_mesh, lower_mesh)
+        new_edges.extend(edge_list)
+        new_faces.extend(face_list)
+    
+    # Add new edges and faces to the mesh.
+    for edge in new_edges:
+        if bm.edges.get(edge) == None:
+            bm.edges.new(edge)
+
+    for face in new_faces:
+        if bm.faces.get(face) == None:
+            bm.faces.new(face)
+    # print("Number of islands should be 507 and is: %d." % len(islands))
+    # print("Number of boundary vertices: %d." % len(b_verts))
+    # print("Longest island has %d vertices." % len(max(islands, key=len)))
+    # print(len(islands[0]))
+
+
+    # c = 0
+    # for e in b_edges[1:]:
+    #     if edges_connected(b_edges[0], e): # Works!
+    #         c += 1
+    #         # print([v.co for v in b_edges[0].verts])
+    #         # print([v.co for v in e.verts])
+    #         if c == 2:
+    #             c = 0
+    #             break
+
+    # print(len(b_verts))
+
+    # for vert in bm.verts:
+    #     vert.hide = True
+    # for edge in bm.edges:
+    #     edge.hide = True
+    # for face in bm.faces:
+    #     face.hide = True
+
+    # for v in [v for sublist in island_pairs[0] for v in sublist]:
+    #     v.hide = False
+    # for v in [v for sublist in island_pairs[1] for v in sublist]:
+    #     v.hide = False
+
+    return bm  #, b_edges
 
 
 def process_objects(obj1, obj2):
@@ -598,10 +846,13 @@ def process_objects(obj1, obj2):
         volume = calculate_closed_triangle_mesh_volume(combi)
     else:
         combi = make_mesh_manifold(combi)
-        # make_mesh_manifold(combi) # TODO: function which makes mesh closed.
 
     # Write data to obj1.
     combi.to_mesh(obj1.data)
+    combi.free()
+
+    # bpy.ops.object.mode_set(mode="EDIT")
+    # bpy.ops.mesh.loop_multi_select(ring=True)
 
     # Remove obj2 and update view layer.
     D.meshes.remove(obj2.data)
@@ -640,7 +891,14 @@ def create_object_set_active(mesh_index, prefix_name):
     obj = D.objects[mesh_index].copy()
     obj.data = D.objects[mesh_index].data.copy()
     obj.name = prefix_name
-    C.scene.collection.objects.link(obj)
+
+    new_color = D.materials.new("Layer_color")
+    new_color.diffuse_color = RGBAS[mesh_index]
+    obj.data.materials[0] = new_color
+    # else:
+    #     obj.data.materials.append(new_color)
+
+    C.collection.objects.link(obj)
     C.view_layer.objects.active = obj
     C.view_layer.update()
     bpy.ops.object.mode_set(mode="EDIT")
@@ -691,6 +949,7 @@ def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
 
     # Delete all vertices in the del_verts list and update the mesh.
     delete_verts_and_update(bm, me, del_verts)
+    bm.free()
     return obj
 
 
@@ -743,7 +1002,7 @@ def main():
     # num_x, num_y, num_z = 150, 150, 50
 
     # Size in centimeters for the primitives.
-    length, width, height = 5, 5, 5
+    # length, width, height = 5, 5, 5
     # print_primitive_size(length, width, height)
 
     # Determine bounding box and translate scene to origin.
@@ -755,11 +1014,9 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-    print_bbox(minx, maxx, miny, maxy, minz, maxz)
-
     volume = object_oriented_algorithm(
         ordered_meshes(), threshold, minx, maxx, miny, maxy, minz, maxz)
-    # # Run the space-oriented algorithm with the assigned primitive.
+    # Run the space-oriented algorithm with the assigned primitive.
     # primitive = "voxel"
     # volume = space_oriented_algorithm(
     #     ordered_meshes(), length, width, height, threshold, minx, maxx, miny,
