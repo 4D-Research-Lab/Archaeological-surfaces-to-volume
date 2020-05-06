@@ -7,6 +7,7 @@
 
 import bpy
 import bmesh
+import mathutils
 import time
 import math
 import numpy as np
@@ -538,6 +539,8 @@ def space_oriented_algorithm(
             length, width, height, threshold, minx, maxx, miny, maxy, minz,
             maxz, upper_mesh, lower_mesh, max_distance, primitive, closed_mesh)
 
+        # TODO: Export vol_prims as point cloud.
+
         # Print the size of the primitives used.
         print_layer_volume(test, volume)
 
@@ -557,14 +560,15 @@ def space_oriented_algorithm(
 
 def find_boundary_vertices(bm):
     """Return all the vertices that are in the boundary of the object."""
-    return [v for v in bm.verts if v.is_boundary]
+    return [v for v in bm.verts if v.is_valid and v.is_boundary]
 
 
 def find_boundary_edges(bm):
     """Return all the edges that are in the boundary of the object."""
-    return [e for e in bm.edges if e.is_boundary]
+    return [e for e in bm.edges if e.is_valid and e.is_boundary]
 
 
+# TODO: not in use, can be removed!
 def edges_connected(e1, e2):
     """Checks if 2 edges are connected to each other or not."""
     return any([v1 == v2 for v1 in e1.verts for v2 in e2.verts])
@@ -580,12 +584,18 @@ def calc_centroid_island(island):
 
 def find_closest_island(centroid, cen_list):
     """Find element in cen_list that is closest to centroid."""
+    # Initiliaze the minimum distance, minimum index in islands list and the
+    # minimum center of a island.
     min_dist = math.inf
     min_index = 0
     min_cen = (0, 0, 0)
 
+    # For every center of an island that has not yet been found, calculate its
+    # distance in 3D space to the specific island. If this distance is smaller
+    # than the current minimum distance, set it to minimum.
     for (i, c) in cen_list:
-        dist = dist_btwn_pts(centroid, c) # TODO: maybe just between x/y coordinates?
+        # TODO: maybe just between x/y coordinates?
+        dist = dist_btwn_pts(centroid, c) 
         if dist < min_dist:
             min_dist = dist
             min_index = i
@@ -596,10 +606,18 @@ def find_closest_island(centroid, cen_list):
 
 def find_mesh_pairs(islands):
     """Find pairs of vertex rings that need to be stiched together."""
+    # If there are an uneven number of islands, pop the last and thus
+    # smallest island.
+    if len(islands) % 2 != 0:
+        islands.pop()
+
+    # Make a list with tuples of indices and centroids of the islands.
     centroids = []
     for i, isle in enumerate(islands):
         centroids.append((i, calc_centroid_island(isle)))
     
+    # Search for pairs beginning with the largest islands. The pairs are
+    # based on centroid distance.
     pairs = []
     not_yet_found = centroids
     for i, c in centroids:
@@ -624,10 +642,18 @@ def check_mesh_closed(bm):
 
 def remove_loose_parts(bm):
     """Remove loose vertices and edges from the mesh."""
+    # Remove faces that are not connected to any other face, e.g. all its
+    # edges are boundary edges.
+    for f in bm.faces:
+        if all([e.is_boundary for e in f.edges]):
+            bm.faces.remove(f)
+    
+    # Remove vertices that have no face connected to it.
     loose_verts = [v for v in bm.verts if not v.link_faces]
     for v in loose_verts:
         bm.verts.remove(v)
 
+    # Remove edges that have no face conncectd to it.
     loose_edges = [e for e in bm.edges if not e.link_faces]
     for e in loose_edges:
         bm.edges.remove(e)
@@ -640,7 +666,7 @@ def walk_island(vert):
     vert.tag = True
     yield(vert)
     linked_verts = [e.other_vert(vert) for e in vert.link_edges
-            if not e.other_vert(vert).tag]
+            if not e.other_vert(vert).tag and e.is_boundary]
 
     for v in linked_verts:
         if v.tag:
@@ -669,63 +695,236 @@ def get_islands(bm, verts=[]):
     return ret
 
 
+def make_next_verts(path1, path2, edges, good_verts):
+    """Get the next vertices for path1 and path2."""
+     # Get the vertices to which the last path vertex is connected to.
+    verts1 = [e.other_vert(path1[-1]) for e in edges
+                if path1[-1] in e.verts]
+    verts2 = [e.other_vert(path2[-1]) for e in edges
+                if path2[-1] in e.verts]
+
+    # Get the vertex that is in good_verts and not in the path and is
+    # connected to the last path vertex.
+    next_vert1 = [v for v in verts1 if v in good_verts and v not in path1]
+    next_vert2 = [v for v in verts2 if v in good_verts and v not in path2]
+
+    return next_vert1, next_vert2
+
+
+def correct_next_verts(next_vert1, next_vert2, wrong_verts):
+    """Returns True if both next_verts are correct."""
+    # If the next verts do not not exists or are wrong vertices, they are not
+    # correct. Else they are correct.
+    if not next_vert1 or not next_vert2:
+        return False
+    elif next_vert1[0] in wrong_verts or next_vert2[0] in wrong_verts:
+        return False
+    
+    return True
+
+
+def check_for_overlap(path1, path2):
+    """Check if the 2 paths overlap."""
+    # The paths overlap if their last vertices are the same or if the last 
+    # vertex of a path is the same as the second-last of the other path.
+    overlap = False
+    if path1[-1] == path2[-1]:
+        overlap = True
+        path1.pop()
+    elif path1[-1] == path2[-2] or path2[-1] == path1[-2]:
+        overlap = True
+        path1.pop()
+        path2.pop()
+    
+    return overlap
+
+
+def small_loop_between(start, e1, e2, edges, wrong_verts, good_verts, count):
+    """Determines if there exists a small loop between e1 and e2."""
+    # Initialize 2 paths from the start vertex with 4 boundary edges connected
+    # to it.
+    path1 = [start, e1.other_vert(start)] 
+    path2 = [start, e2.other_vert(start)]
+
+    # Initialize the loop_found and verts that are in the loop variables.
+    loop_found = False
+    verts = []
+
+    # Search for a loop while it is not found and count is not less than 0.
+    while not loop_found:
+        count -= 1
+        if count < 0:
+            break
+
+        # Get the next vertices in both paths.
+        next_vert1, next_vert2 = make_next_verts(path1, path2, edges,
+                                                 good_verts)
+
+        # If there is no next vertex or it is a wrong vertex, stop the search.
+        if not correct_next_verts(next_vert1, next_vert2, wrong_verts):
+            break
+
+        # Append the next vertices to their paths.
+        path1.append(next_vert1[0])      
+        path2.append(next_vert2[0])
+
+        # Check if a loop is found, e.g. are there overlapping elements in the
+        # paths. If so, pop paths accordingly and set loop_found to true.
+        loop_found = check_for_overlap(path1, path2)
+
+    # Put all the vertices in the loop in a list, without the start vertex.
+    if loop_found:
+        verts = path1 + path2
+        verts = [v for v in verts if v != start]
+
+    return loop_found, verts
+
+
+def remove_loops(mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
+                 wrong_verts, combinations, counts):
+    """Remove small loops from a vertex island."""
+    # Initialize incrementer to 0 and vertices found list to empty.
+    i = 0
+    verts_found = []
+
+    # While there are vertices with another number than 2 connected edges,
+    # try to find and remove the smaller loop on these vertices.
+    while len(wrong_verts) > len(verts_found):
+        count = counts[i]
+
+        # Loop over wrong vertices where the loop has not yet been found.
+        for v in [v for v in wrong_verts if v not in verts_found]:
+
+            # For all edge pair combinations, try to find loop between them.
+            edges_list = [e for e in b_edges if v in e.verts]
+            for ind1, ind2 in combinations:
+                edge1, edge2 = edges_list[ind1], edges_list[ind2]
+                loop_found, loop_verts = small_loop_between(
+                    v, edge1, edge2, b_edges,
+                    [v for v in wrong_verts if v not in verts_found],
+                    mesh, count)
+                
+                # If a loop is found, add edges and vertices in the loop to the
+                # to_be_removed lists. Also remove the vertices from the
+                # current mesh and add the start vertex to verts_found.
+                if loop_found:
+                    edges_to_be_removed.extend([edge1, edge2])
+                    verts_to_be_removed.extend(loop_verts)
+                    for vert in loop_verts:
+                        if vert in mesh:
+                            mesh.remove(vert)
+                    verts_found.append(v)
+                    break
+        
+        # If the incrementer exceeds the length of counts, break. Remaining
+        # loops are too big to be found -> increase counts if necessary.
+        i += 1
+        if i >= len(counts):
+            break
+
+
+def remove_small_loops(upper_mesh, lower_mesh, b_edges):
+    """Remove small loops from the boundary vertices, e.g. vertices with 4
+    edges."""
+    # Initialize edges and vertices that need to be removed lists.
+    edges_to_be_removed, verts_to_be_removed = [], []
+
+    # Determine all wrong vertices, e.g. vertices with an other number than 2
+    # boundary vertices connected to it.
+    upper_wrong_verts = [v for v in upper_mesh
+                         if len([e for e in b_edges if v in e.verts]) != 2]
+    lower_wrong_verts = [v for v in lower_mesh
+                         if len([e for e in b_edges if v in e.verts]) != 2]
+
+    # Make combinations of the edges, based on 4 edges.
+    combinations = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    
+    # Make a count list, so that first the smallest loops are found.
+    counts = [2**n for n in range(6)]
+    
+    # Remove loops in the upper mesh.
+    remove_loops(
+        upper_mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
+        upper_wrong_verts, combinations, counts)
+    
+    # Remove loops in the lower mesh.
+    remove_loops(
+        lower_mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
+        lower_wrong_verts, combinations, counts)
+
+    return upper_mesh, lower_mesh, edges_to_be_removed, verts_to_be_removed
+
+
+def sort_vert_list(sorted_list, unsorted, boundary_edges):
+    """Create a sorted list of vertices based on edge connections of boundary
+    edges."""
+    # Add vertices while the length of the sorted list is less than the
+    # original list.
+    while len(sorted_list) < len(unsorted):
+        # Get the last vertex of the list and get the vertices to which this
+        # vertex is connected via the connected edges.
+        cur_vert = sorted_list[-1]
+        edges = [e for e in boundary_edges if cur_vert in e.verts]
+        connected = [e.other_vert(cur_vert) for e in edges]
+        
+        # If the length of the sorted is 1, just add the first connected
+        # vertex. Else add the one not yet in the sorted list.
+        if len(sorted_list) == 1:
+            sorted_list.append(connected[0])
+        else:
+            next_vert = [v for v in connected if v != sorted_list[-2]]
+            sorted_list.extend(next_vert)
+
+
 def sort_vert_lists(upper_mesh, lower_mesh, b_edges):
     """Sort the lists of BMVerts, so that vertices that are physically next to
     each other, are also next to each other in the list."""
-    # TODO: if 2 verts in a list are connected by edge in b_edges -> next to
-    # each other.
-
-    # TODO: are there duplicate edges in b_edges???
+    # Initialize the lists with the vertex at index 0.
     up, low = [upper_mesh[0]], [lower_mesh[0]]
-    while len(up) < len(upper_mesh):
-        cur_vert = up[-1]
-        edges = [e.verts for e in b_edges if cur_vert in e.verts]
-        connected = [v for tup in edges for v in tup if v is not cur_vert]
-        print(connected)
-        if len(up) == 1:
-            up.append(connected[0])
-        else:
-            next_vert = [v for v in connected if v is not up[-2]]
-            print(next_vert)
-            up.extend(next_vert)
-
-    print(up)
-
-    while len(low) < len(lower_mesh):
-        cur_vert = low[-1]
-        edges = [e.verts for e in b_edges if cur_vert in e.verts]
-        connected = [v for tup in edges for v in tup if v is not cur_vert]
-        if len(low) == 1:
-            low.append(connected[0])
-        else:
-            next_vert = [v for v in connected if v is not up[-2]]
-            low.extend(next_vert)
+    
+    # Sort both island vertices.
+    sort_vert_list(up, upper_mesh, b_edges)
+    sort_vert_list(low, lower_mesh, b_edges)
 
     return up, low
 
 
-def jasnom_stitch(upper_mesh, lower_mesh):
-    """Stitch 2 vertex rings together using the JASNOM algorithm."""
-    new_edges, new_faces = [], []
-    first_edges, second_edges = [], []
-    # print(type(upper_mesh)) Just a list of BMVerts
+def find_long_mesh(mesh1, mesh2):
+    """Return longest mesh as first element."""
+    if len(mesh1) >= len(mesh2):
+        return mesh1, mesh2
+    return mesh2, mesh1
 
-    # TODO: upper_mesh and lower_mesh need to be sorted, so that vertices next
-    # to eachother are also in the list next to eachother. 
-    if len(upper_mesh) >= len(lower_mesh):
-        long_mesh = upper_mesh
-        short_mesh = lower_mesh
-    else:
-        long_mesh = lower_mesh
-        short_mesh = upper_mesh
+
+def horizontal_edge(vector, rad):
+    """Check if the edge is too horinzontal."""
+    up = mathutils.Vector((0, 0, 1))
+    down = mathutils.Vector((0, 0, -1))
     
-    # 1. Loop over longest mesh heen en maak een edge van elke vertex naar de
-    #    dichtsbijzijnde vertex in de loshortwer mesh.
-    # This step works!
+    # Edge must be upwards or downwards with an angle <0.6 radians.
+    if abs(up.angle(vector)) > rad and abs(down.angle(vector)) > rad:
+        return True
+
+    return False
+ 
+
+def jasnom_step_1_and_2(long_mesh, short_mesh):
+    """Execute step 1 and step 2 of the JASNOM algorithm between the long mesh
+    and the short mesh."""
+    first_edges, second_edges = [], []
+    
+    # Loop over longest mesh vertices and make edge to closest vertex on the
+    # shorter mesh.
     for i, v in enumerate(long_mesh):
         min_dist = math.inf
 
         for j, other_v in enumerate(short_mesh): 
+            cur_vec = other_v.co - v.co
+
+            # If the edge is too horizontal dont use it.
+            if horizontal_edge(cur_vec, 0.6):
+                continue 
+
             cur_dist = dist_btwn_pts(v.co, other_v.co)
             if cur_dist < min_dist:
                 min_dist = cur_dist
@@ -733,64 +932,182 @@ def jasnom_stitch(upper_mesh, lower_mesh):
 
         first_edges.append((i, min_edge))
 
-    # all_edges = first_edges
-    # 2. Loop omgekeerd over de long mesh en maak een edge naar de target
-    #    vertex van de vorige vertex uit de long mesh.
-    # This step does not work.
+    # Loop in reversed order over longer mesh and make a second edge to the
+    # shorter mesh to the target vertex of the previous vertex in the longer
+    # mesh.
     for i, v in reversed(first_edges):
         new_index = (i + 1) % len(first_edges)
         second_edges.append((new_index, v))
         
     all_edges = list(set(first_edges + second_edges))
+    return all_edges
 
-    # 3. Loop over short mesh en check of er minstens 1 edge van elke vertex
-    #    naar de andere mesh gaat. Als dat niet zo is, maak een edge naar de
-    #    target vertex van de vorige vertex uit de short mesh.
-    # for i in range(len(short_mesh)):
-    #     if not i in [s for _, s in all_edges]:
-    #         # TODO: add edge from this vertex to prev in upper_mesh
-    #         prevs = [e1 for (e1, e2) in all_edges if e2 == (i - 1) % len(short_mesh)]
-    #         while not prevs:
-    #             i -= 1
-    #             prevs = [e1 for (e1, e2) in all_edges if e2 == (i - 1) % len(short_mesh)]
+
+def try_adding_edge(prev_vert, next_vert, v_index, connected_in_this_step,
+                    not_connected, all_edges, long_mesh, short_mesh, rad):
+    """Try making an vertical edge from short mesh to lower mesh"""
+    made_edge = False
+
+    for v in [prev_vert, next_vert]:
+        if made_edge:
+            continue
+
+        # If this previous vertex is connected to the long mesh, connect
+        # current vertex to 1 of its neighbours.
+        if not v in not_connected or v in connected_in_this_step:            
+            # Get neighbours in the long mesh of the previous vertex.
+            possible_vertices = [
+                v1 for (v1, v2) in all_edges if v2 == v and not
+                horizontal_edge((long_mesh[v1].co - short_mesh[v_index].co), rad)]
             
-    #         all_edges.append((max(prevs), i))
+            if not possible_vertices:
+                continue
+            
+            if len(possible_vertices) == 1:
+                connected_in_this_step.append(v_index)
+                all_edges.append((possible_vertices[0], v_index))
+            else:
+                # Make vectors to calculate angle between them.
+                vec1 = short_mesh[v_index].co - short_mesh[v].co
+                prevs_vecs = [long_mesh[n].co - short_mesh[v].co
+                              for n in possible_vertices]
+                
+                # Calculate the angle between possible edges and the edge from
+                # previous to current vertex and get the minimum.
+                angles = list(map(vec1.angle, prevs_vecs))
+                vert = possible_vertices[angles.index(min(angles, key=abs))]
 
-    # print(all_edges)
+                all_edges.append((vert, v_index))
+                connected_in_this_step.append(v_index)
+            
+            made_edge = True
+ 
 
+# TODO: maybe get get previous and next vertex which have an edge to long mesh
+# and connect vertices in between to the vertex in long mesh where both the 
+# previous and next connect. 
+def jasnom_step_3(long_mesh, short_mesh, all_edges):
+    """Execute step 3 of the JASNOM algorithm between the long mesh and the
+    short mesh."""
+    # Check if at least 1 edge connects a vertex of the shorter mesh to the
+    # longer mesh. If not, make an edge to the target vertex of a neighbour
+    # vertex in the shorter mesh.
+    not_connected = [i for i in range(len(short_mesh))
+                     if i not in [s for _, s in all_edges]]
+    connected_in_this_step = []
+    rad = [0.1 * n for n in range(1, 17)]
+    j = 0
+
+    while len(not_connected) > len(connected_in_this_step):
+        for v_index in [i for i in not_connected if not i in connected_in_this_step]:
+            # Get the previous vertex for a vertex that is still not connected
+            # to the long mesh.
+            prev_vert = ((v_index - 1) % len(short_mesh))
+            next_vert = ((v_index + 1) % len(short_mesh))
+
+            try_adding_edge(
+                prev_vert, next_vert, v_index, connected_in_this_step,
+                not_connected, all_edges, long_mesh, short_mesh, rad[j])
+
+        j += 1
+
+
+def make_jasnom_faces(long_mesh, short_mesh, new_edges):
+    """Make faces that are generated by the JASNOM algorithm."""
+    new_faces = []
+
+    # For all vertices in the long mesh, check if it has multiple edges to the
+    # short mesh. If so, make the faces for these edges.
+    for v in long_mesh:
+        edges_with_v = [e for e in new_edges if v == e[0] or v == e[1]]
+        if len(edges_with_v) >= 2:
+            verts = [e[0] if v == e[1] else e[1] for e in edges_with_v]
+            verts.sort(key=short_mesh.index)
+            while len(verts) >= 2:
+                new_faces.append((v, verts.pop(0), verts[0]))
+
+    # For all vertices in the short mesh, check if it has multiple edges to the
+    # long mesh. If so, make the faces for these edges.
+    for v in short_mesh:
+        edges_with_v = [e for e in new_edges if v == e[0] or v == e[1]]
+        if len(edges_with_v) >= 2:
+            verts = [e[0] if v == e[1] else e[1] for e in edges_with_v]
+            verts.sort(key=long_mesh.index)
+            while len(verts) >= 2: 
+                new_faces.append((v, verts.pop(0), verts[0]))
+    
+    return []
+
+
+def jasnom_stitch(upper_mesh, lower_mesh):
+    """Stitch 2 vertex rings together using the JASNOM algorithm. The JASNOM
+    algorithm ensures that there are no edges crossing each other."""
+    long_mesh, short_mesh = find_long_mesh(upper_mesh, lower_mesh)
+    
+    all_edges = jasnom_step_1_and_2(long_mesh, short_mesh)
+    jasnom_step_3(long_mesh, short_mesh, all_edges)
+
+    # Make lists of edges and faces that need to be added to the mesh.
     new_edges = [(long_mesh[i], short_mesh[j]) for (i, j) in all_edges]
-    new_faces = [] # tuples of 3 BMVerts.
-    # The new edges and faces must be added to the mesh object. 
+    new_faces = make_jasnom_faces(long_mesh, short_mesh, new_edges)
+
     return new_edges, new_faces
+
+
+def remove_loops_and_stitch(mesh1, mesh2, b_edges, bmsh, new_edges, new_faces):
+    """Remove small loops and stitch island pair together."""
+    # Remove small loops in the island vertices.
+    mesh1, mesh2, edges_removed, verts_removed = remove_small_loops(
+        mesh1, mesh2, b_edges)
+
+    # Remove the edges and vertices that are in small loops.
+    for e in edges_removed:
+        if e.is_valid:
+            bmsh.edges.remove(e)
+    for v in verts_removed:
+        if v.is_valid:
+            bmsh.verts.remove(v)
+
+    # Update the boundary edges according to the removal.
+    b_edges = [e for e in b_edges if e.is_valid]
+
+    # Sort the vertex islands so that vertices next to each other in the
+    # list are also next to each other in the island.
+    mesh1, mesh2 = sort_vert_lists(mesh1, mesh2, b_edges)
+
+    # Stitch the 2 islands together using the JASNOM algorithm and add the
+    # new edges and faces to the list.
+    edge_list, face_list = jasnom_stitch(mesh1, mesh2)
+    new_edges.extend(edge_list)
+    new_faces.extend(face_list)
+
+    return mesh1, mesh2, b_edges
 
 
 def make_mesh_manifold(bm):
     """Make the received mesh manifold."""
+    # Remove loose edges and vertices.
     remove_loose_parts(bm)
-    # bm.edges.ensure_lookup_table()
-    # bm.verts.index_update()
+
+    # Determince boundary vertices and edges.
     b_verts = find_boundary_vertices(bm)
     b_edges = find_boundary_edges(bm)
 
-    islands = [island for island in get_islands(bm, verts=b_verts)["islands"]]
-    # islands = [[v for v in isle if v.is_boundary] for isle in islands]
+    # Calculate vertex islands (loose parts) based on the boundary vertices and
+    # sort them from large to small.
+    # TODO: but distinguish between holes in mesh and little, loose meshes!
+    islands = [island for island in get_islands(bm, verts=b_verts)["islands"]
+               if len(island) > 10]
     islands = sorted(islands, key=len, reverse=True)
-
-    # TODO: find pairs of islands and connect them via JASNOM algorithm
+    
+    # Create pairs of island vertices that are close together.
     island_pairs = find_mesh_pairs(islands)
-    # print(island_pairs[3])
 
+    # Stitch the pairs together using the JASNOM algorithm.
     new_edges, new_faces = [], []
-    # for upper_mesh, lower_mesh in island_pairs[0]:
-    for [upper_mesh, lower_mesh] in island_pairs[:1]:
-        upper_mesh, lower_mesh = sort_vert_lists(upper_mesh, lower_mesh, b_edges)
-        # upper_mesh = pair[0]
-        # lower_mesh = pair[1]
-        # print(len(upper_mesh))
-        # print(len(lower_mesh))
-        edge_list, face_list = jasnom_stitch(upper_mesh, lower_mesh)
-        new_edges.extend(edge_list)
-        new_faces.extend(face_list)
+    for [upper_mesh, lower_mesh] in island_pairs[:3]:
+        upper_mesh, lower_mesh, b_edges = remove_loops_and_stitch(
+            upper_mesh, lower_mesh, b_edges, bm, new_edges, new_faces)
     
     # Add new edges and faces to the mesh.
     for edge in new_edges:
@@ -800,37 +1117,8 @@ def make_mesh_manifold(bm):
     for face in new_faces:
         if bm.faces.get(face) == None:
             bm.faces.new(face)
-    # print("Number of islands should be 507 and is: %d." % len(islands))
-    # print("Number of boundary vertices: %d." % len(b_verts))
-    # print("Longest island has %d vertices." % len(max(islands, key=len)))
-    # print(len(islands[0]))
 
-
-    # c = 0
-    # for e in b_edges[1:]:
-    #     if edges_connected(b_edges[0], e): # Works!
-    #         c += 1
-    #         # print([v.co for v in b_edges[0].verts])
-    #         # print([v.co for v in e.verts])
-    #         if c == 2:
-    #             c = 0
-    #             break
-
-    # print(len(b_verts))
-
-    # for vert in bm.verts:
-    #     vert.hide = True
-    # for edge in bm.edges:
-    #     edge.hide = True
-    # for face in bm.faces:
-    #     face.hide = True
-
-    # for v in [v for sublist in island_pairs[0] for v in sublist]:
-    #     v.hide = False
-    # for v in [v for sublist in island_pairs[1] for v in sublist]:
-    #     v.hide = False
-
-    return bm  #, b_edges
+    return bm
 
 
 def process_objects(obj1, obj2):
@@ -845,14 +1133,14 @@ def process_objects(obj1, obj2):
     if check_mesh_closed(combi):
         volume = calculate_closed_triangle_mesh_volume(combi)
     else:
+        # TODO: remove small islands from mesh. Like less than 15 verts.
         combi = make_mesh_manifold(combi)
 
     # Write data to obj1.
+    combi.normal_update()
+    volume = combi.calc_volume()
     combi.to_mesh(obj1.data)
     combi.free()
-
-    # bpy.ops.object.mode_set(mode="EDIT")
-    # bpy.ops.mesh.loop_multi_select(ring=True)
 
     # Remove obj2 and update view layer.
     D.meshes.remove(obj2.data)
@@ -888,16 +1176,18 @@ def update_indices(upper_mesh, lower_mesh, prefix_name):
 
 def create_object_set_active(mesh_index, prefix_name):
     """Create a new object and set it active in edit mode."""
+    # Make a new object which copies data from the object at index mesh_index.
     obj = D.objects[mesh_index].copy()
     obj.data = D.objects[mesh_index].data.copy()
+    obj.data.name = prefix_name
     obj.name = prefix_name
 
+    # Give the new_object a new material color.
     new_color = D.materials.new("Layer_color")
     new_color.diffuse_color = RGBAS[mesh_index]
     obj.data.materials[0] = new_color
-    # else:
-    #     obj.data.materials.append(new_color)
 
+    # Link the object to the collection and update the view_layer.
     C.collection.objects.link(obj)
     C.view_layer.objects.active = obj
     C.view_layer.update()
@@ -957,7 +1247,7 @@ def object_oriented_algorithm(
         meshes, threshold, minx, maxx, miny, maxy, minz, maxz, test=False):
     """Object-oriented algorithm to make a 3D model out of multiple triangular
     meshes."""
-    tot_volume = 0
+    tot_volume, cur_volume = 0, 0
     max_distance = maxz - minz
     threshold /= 100
 
@@ -968,9 +1258,12 @@ def object_oriented_algorithm(
                          threshold, max_distance, dr="down")
         lower = cut_mesh(minx, maxx, miny, maxy, lower_mesh, upper_mesh,
                          threshold, max_distance, dr="up")
-        tot_volume += process_objects(upper, lower)
-
-    return tot_volume
+        cur_volume = process_objects(upper, lower)
+        print_layer_volume(False, cur_volume)
+        tot_volume += cur_volume
+        cur_volume = 0
+    
+    return tot_volume * 1000000
 
 
 def slicer_algotihm(
@@ -1014,8 +1307,10 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
+    # Run the object-oriented algorithm.
     volume = object_oriented_algorithm(
         ordered_meshes(), threshold, minx, maxx, miny, maxy, minz, maxz)
+    
     # Run the space-oriented algorithm with the assigned primitive.
     # primitive = "voxel"
     # volume = space_oriented_algorithm(
