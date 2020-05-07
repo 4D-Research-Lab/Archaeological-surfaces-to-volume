@@ -11,6 +11,7 @@ import mathutils
 import time
 import math
 import numpy as np
+import itertools
 import sys
 sys.setrecursionlimit(2500)
 
@@ -160,6 +161,7 @@ def print_layer_volume(test, volume):
               (volume, volume / 1000000))
 
 
+# Start of the space-oriented algorithm.
 def ordered_meshes():
     """Return the list of indices in de bpy.data.objects list of all
     objects from high to low (highest avg z-coordinate of vertices)."""
@@ -401,8 +403,6 @@ def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold,
                      closed_mesh):
     """Decide if the primitive on the given position belongs to the volume
     between the meshes."""
-    # TODO: check if point is in the mesh or not by casting rays in point where
-    # the there were hits.
     if closed_mesh and check_outside_mesh(upper_mesh, center, max_distance):
         return False
 
@@ -558,6 +558,7 @@ def space_oriented_algorithm(
     return tot_volume
 
 
+# Start of the object-oriented algortihm.
 def find_boundary_vertices(bm):
     """Return all the vertices that are in the boundary of the object."""
     return [v for v in bm.verts if v.is_valid and v.is_boundary]
@@ -568,10 +569,10 @@ def find_boundary_edges(bm):
     return [e for e in bm.edges if e.is_valid and e.is_boundary]
 
 
-# TODO: not in use, can be removed!
-def edges_connected(e1, e2):
-    """Checks if 2 edges are connected to each other or not."""
-    return any([v1 == v2 for v1 in e1.verts for v2 in e2.verts])
+def dist_btwn_2d_pts(p1, p2):
+    """Calculate the distance between 2 2D points."""
+    x_dif, y_dif = p1[0] - p2[0], p1[1] - p2[1]
+    return math.sqrt(x_dif**2 + y_dif**2)
 
 
 def calc_centroid_island(island):
@@ -594,16 +595,16 @@ def find_closest_island(centroid, cen_list):
     # distance in 3D space to the specific island. If this distance is smaller
     # than the current minimum distance, set it to minimum.
     for (i, c) in cen_list:
-        # TODO: maybe just between x/y coordinates?
-        dist = dist_btwn_pts(centroid, c) 
+        dist = dist_btwn_2d_pts(centroid[:2], c[:2]) 
         if dist < min_dist:
             min_dist = dist
             min_index = i
             min_cen = c
     
-    return min_index, min_cen
+    return min_index, min_cen, min_dist
 
 
+# TODO: does not seem to pair correctly!
 def find_mesh_pairs(islands):
     """Find pairs of vertex rings that need to be stiched together."""
     # If there are an uneven number of islands, pop the last and thus
@@ -623,9 +624,12 @@ def find_mesh_pairs(islands):
     for i, c in centroids:
         if (i, c) in not_yet_found:
             not_yet_found.remove((i, c))
-            j, cen = find_closest_island(c, not_yet_found)
-            not_yet_found.remove((j, cen))
-            pairs.append([islands[i], islands[j]])
+            j, cen, dist = find_closest_island(c, not_yet_found)
+            if dist > 0.5 or abs(len(islands[i]) - len(islands[j])) > 300:
+                continue
+            else:
+                not_yet_found.remove((j, cen))
+                pairs.append([islands[i], islands[j]])
 
     return pairs
 
@@ -912,23 +916,30 @@ def jasnom_step_1_and_2(long_mesh, short_mesh):
     """Execute step 1 and step 2 of the JASNOM algorithm between the long mesh
     and the short mesh."""
     first_edges, second_edges = [], []
-    
+    radians = [0.6 + 0.1 * n for n in range(11)]
+
     # Loop over longest mesh vertices and make edge to closest vertex on the
     # shorter mesh.
     for i, v in enumerate(long_mesh):
-        min_dist = math.inf
+        edge_found = False
+        count = 0
+        while not edge_found:
+            min_dist = math.inf
 
-        for j, other_v in enumerate(short_mesh): 
-            cur_vec = other_v.co - v.co
+            for j, other_v in enumerate(short_mesh): 
+                cur_vec = other_v.co - v.co
 
-            # If the edge is too horizontal dont use it.
-            if horizontal_edge(cur_vec, 0.6):
-                continue 
-
-            cur_dist = dist_btwn_pts(v.co, other_v.co)
-            if cur_dist < min_dist:
-                min_dist = cur_dist
-                min_edge = j
+                # If the edge is too horizontal dont use it.
+                if horizontal_edge(cur_vec, radians[count]):
+                    continue 
+                
+                edge_found = True
+                cur_dist = dist_btwn_pts(v.co, other_v.co)
+                if cur_dist < min_dist:
+                    min_dist = cur_dist
+                    min_edge = j
+                
+            count += 1
 
         first_edges.append((i, min_edge))
 
@@ -983,9 +994,6 @@ def try_adding_edge(prev_vert, next_vert, v_index, connected_in_this_step,
             made_edge = True
  
 
-# TODO: maybe get get previous and next vertex which have an edge to long mesh
-# and connect vertices in between to the vertex in long mesh where both the 
-# previous and next connect. 
 def jasnom_step_3(long_mesh, short_mesh, all_edges):
     """Execute step 3 of the JASNOM algorithm between the long mesh and the
     short mesh."""
@@ -995,51 +1003,124 @@ def jasnom_step_3(long_mesh, short_mesh, all_edges):
     not_connected = [i for i in range(len(short_mesh))
                      if i not in [s for _, s in all_edges]]
     connected_in_this_step = []
-    rad = [0.1 * n for n in range(1, 17)]
-    j = 0
 
-    while len(not_connected) > len(connected_in_this_step):
-        for v_index in [i for i in not_connected if not i in connected_in_this_step]:
-            # Get the previous vertex for a vertex that is still not connected
-            # to the long mesh.
-            prev_vert = ((v_index - 1) % len(short_mesh))
-            next_vert = ((v_index + 1) % len(short_mesh))
+    for v_index in not_connected:
+        prev_index = ((v_index - 1) % len(short_mesh))
+        prev_with_edge = [v1 for (v1, v2) in all_edges if v2 == prev_index]
+        while not prev_with_edge:
+            prev_index = (prev_index - 1) % len(short_mesh)
+            prev_with_edge = [v1 for (v1, v2) in all_edges if v2 == prev_index]
 
-            try_adding_edge(
-                prev_vert, next_vert, v_index, connected_in_this_step,
-                not_connected, all_edges, long_mesh, short_mesh, rad[j])
+        next_index = ((v_index + 1) % len(short_mesh))
+        next_with_edge = [v1 for (v1, v2) in all_edges if v2 == next_index]
+        while not next_with_edge:
+            next_index = (next_index + 1) % len(short_mesh)
+            next_with_edge = [v1 for (v1, v2) in all_edges if v2 == next_index]
 
-        j += 1
+        common_vertices = list(set(prev_with_edge) & set(next_with_edge))
+        if common_vertices:
+            target_vertex = common_vertices[0]
+            all_edges.append((target_vertex, v_index))
+            connected_in_this_step.append(v_index)
+    
+    # If there are vertices still not connected, make them into groups which
+    # consists of vertices next to each other and add them all to the vertex 
+    # in the long mesh closest to the average location.
+    still_not_connected = [v for v in not_connected if v not in connected_in_this_step]
+    v_index_groups = []
+    for v in still_not_connected:
+        short_mesh[v].select = True
+        added = False
+        prev_vert = (v - 1) % len(short_mesh)
+        next_vert = (v + 1) % len(short_mesh)
+
+        for group in v_index_groups:
+            if prev_vert in group or next_vert in group:
+                group.append(v)
+                added = True
+        
+        if not added:
+            v_index_groups.append([v])
+
+    v_groups = [[short_mesh[i] for i in indices] for indices in v_index_groups]
+    avg_location = [calc_centroid_island(group) for group in v_groups]
+   
+    for i, loc in enumerate(avg_location):
+        min_dist = math.inf
+
+        for j, other_v in enumerate(long_mesh): 
+            cur_dist = dist_btwn_pts(loc, other_v.co)
+            if cur_dist < min_dist:
+                min_dist = cur_dist
+                min_edge = j
+
+        for v_index in v_index_groups[i]:
+            all_edges.append((min_edge, v_index))
 
 
-def make_jasnom_faces(long_mesh, short_mesh, new_edges):
+def make_jasnom_faces(long_mesh, short_mesh, new_edges, b_edges):
     """Make faces that are generated by the JASNOM algorithm."""
     new_faces = []
+    vertex_pairs = [(e.verts[0], e.verts[1]) for e in b_edges]
 
     # For all vertices in the long mesh, check if it has multiple edges to the
     # short mesh. If so, make the faces for these edges.
     for v in long_mesh:
-        edges_with_v = [e for e in new_edges if v == e[0] or v == e[1]]
+        edges_with_v = [e for e in new_edges if v == e[0]] # or v == e[1]]
         if len(edges_with_v) >= 2:
-            verts = [e[0] if v == e[1] else e[1] for e in edges_with_v]
-            verts.sort(key=short_mesh.index)
-            while len(verts) >= 2:
-                new_faces.append((v, verts.pop(0), verts[0]))
+            verts = [e[1] for e in edges_with_v]
+            edges = [(v1, v2) for v1, v2 in itertools.combinations(verts, 2) if (v1, v2) in vertex_pairs or (v2, v1) in vertex_pairs]
+
+            for v1, v2 in edges:
+                new_faces.append((v, v1, v2))
+            # TODO: check which verts make edges in short mesh.
+            # verts.sort(key=short_mesh.index)
+
+            # verts_indices = [short_mesh.index(v) for v in verts]
+            # if 0 in verts_indices and (len(short_mesh) - 1) in verts_indices:
+            #     found = True
+            #     ind = 1
+            #     while found:
+            #         if not ind in verts_indices:
+            #             break
+            #         else:
+            #             ind += 1
+
+            #     verts = verts[ind:] + verts[:ind]
+            # while len(verts) >= 2:
+            #     new_faces.append((v, verts.pop(0), verts[0]))
 
     # For all vertices in the short mesh, check if it has multiple edges to the
     # long mesh. If so, make the faces for these edges.
     for v in short_mesh:
-        edges_with_v = [e for e in new_edges if v == e[0] or v == e[1]]
+        edges_with_v = [e for e in new_edges if v == e[1]] # or v == e[1]]
         if len(edges_with_v) >= 2:
-            verts = [e[0] if v == e[1] else e[1] for e in edges_with_v]
-            verts.sort(key=long_mesh.index)
-            while len(verts) >= 2: 
-                new_faces.append((v, verts.pop(0), verts[0]))
+            verts = [e[0] for e in edges_with_v]
+            edges = [(v1, v2) for v1, v2 in itertools.combinations(verts, 2) if (v1, v2) in vertex_pairs or (v2, v1) in vertex_pairs]
+
+            for v1, v2 in edges:
+                new_faces.append((v, v1, v2))
+            # # verts = [e[0] if v == e[1] else e[1] for e in edges_with_v]
+            # verts.sort(key=long_mesh.index)
+
+            # verts_indices = [long_mesh.index(v) for v in verts]
+            # if 0 in verts_indices and (len(long_mesh) - 1) in verts_indices:
+            #     found = True
+            #     ind = 1
+            #     while found:
+            #         if not ind in verts_indices:
+            #             break
+            #         else:
+            #             ind += 1
+
+            #     verts = verts[ind:] + verts[:ind]
+            # while len(verts) >= 2: 
+            #     new_faces.append((v, verts.pop(0), verts[0]))
     
-    return []
+    return new_faces
 
 
-def jasnom_stitch(upper_mesh, lower_mesh):
+def jasnom_stitch(upper_mesh, lower_mesh, b_edges):
     """Stitch 2 vertex rings together using the JASNOM algorithm. The JASNOM
     algorithm ensures that there are no edges crossing each other."""
     long_mesh, short_mesh = find_long_mesh(upper_mesh, lower_mesh)
@@ -1049,7 +1130,7 @@ def jasnom_stitch(upper_mesh, lower_mesh):
 
     # Make lists of edges and faces that need to be added to the mesh.
     new_edges = [(long_mesh[i], short_mesh[j]) for (i, j) in all_edges]
-    new_faces = make_jasnom_faces(long_mesh, short_mesh, new_edges)
+    new_faces = make_jasnom_faces(long_mesh, short_mesh, new_edges, b_edges)
 
     return new_edges, new_faces
 
@@ -1077,11 +1158,49 @@ def remove_loops_and_stitch(mesh1, mesh2, b_edges, bmsh, new_edges, new_faces):
 
     # Stitch the 2 islands together using the JASNOM algorithm and add the
     # new edges and faces to the list.
-    edge_list, face_list = jasnom_stitch(mesh1, mesh2)
+    edge_list, face_list = jasnom_stitch(mesh1, mesh2, b_edges)
     new_edges.extend(edge_list)
     new_faces.extend(face_list)
 
     return mesh1, mesh2, b_edges
+
+
+def remove_small_islands(obj):
+    """Remove small islands from the mesh."""
+    for ob in D.objects:
+        ob.select_set(False)
+
+    # Select only the specified object and separate it into loose parts.
+    obj.select_set(True)
+    bpy.ops.mesh.separate(type="LOOSE")
+
+    # Remove all objects which are too small, <50 vertices.
+    for o in C.selected_objects:
+        if len(o.data.vertices) < 400:
+            D.meshes.remove(o.data)
+
+    # Join the remaining big objects together.
+    C.view_layer.objects.active = C.selected_objects[0]
+    bpy.ops.object.join()
+
+    # Remove the mesh data that is not used.
+    for m in D.meshes:
+        if m.users == 0:
+            D.meshes.remove(m)
+    
+    return C.selected_objects[0]
+
+
+def fill_in_holes(obj):
+    """Fill in the holes of the mesh to get continuous mesh."""
+    for ob in D.objects:
+        ob.select_set(False)
+
+    # Select only the specified object and fill its holes.
+    obj.select_set(True)
+    bpy.ops.mesh.fill_holes(sides=3)
+
+    return obj
 
 
 def make_mesh_manifold(bm):
@@ -1095,9 +1214,7 @@ def make_mesh_manifold(bm):
 
     # Calculate vertex islands (loose parts) based on the boundary vertices and
     # sort them from large to small.
-    # TODO: but distinguish between holes in mesh and little, loose meshes!
-    islands = [island for island in get_islands(bm, verts=b_verts)["islands"]
-               if len(island) > 10]
+    islands = [island for island in get_islands(bm, verts=b_verts)["islands"]]
     islands = sorted(islands, key=len, reverse=True)
     
     # Create pairs of island vertices that are close together.
@@ -1105,7 +1222,7 @@ def make_mesh_manifold(bm):
 
     # Stitch the pairs together using the JASNOM algorithm.
     new_edges, new_faces = [], []
-    for [upper_mesh, lower_mesh] in island_pairs[:3]:
+    for [upper_mesh, lower_mesh] in island_pairs:
         upper_mesh, lower_mesh, b_edges = remove_loops_and_stitch(
             upper_mesh, lower_mesh, b_edges, bm, new_edges, new_faces)
     
@@ -1124,26 +1241,29 @@ def make_mesh_manifold(bm):
 def process_objects(obj1, obj2):
     """Combine 2 objects into 1 and remove the 2 objects aftwerwards."""
     volume = 0
+    ob1 = remove_small_islands(obj1)
+    ob2 = remove_small_islands(obj2)
 
     # Make a new bmesh that combines data from obj1 and obj2.
     combi = bmesh.new()
-    combi.from_mesh(obj1.data)
-    combi.from_mesh(obj2.data)
+    combi.from_mesh(ob1.data)
+    combi.from_mesh(ob2.data)
 
     if check_mesh_closed(combi):
         volume = calculate_closed_triangle_mesh_volume(combi)
     else:
-        # TODO: remove small islands from mesh. Like less than 15 verts.
         combi = make_mesh_manifold(combi)
 
+    # bmesh.ops.holes_fill()
     # Write data to obj1.
+    combi.to_mesh(ob1.data)
+    # ob1 = fill_in_holes(ob1)
     combi.normal_update()
     volume = combi.calc_volume()
-    combi.to_mesh(obj1.data)
     combi.free()
 
     # Remove obj2 and update view layer.
-    D.meshes.remove(obj2.data)
+    D.meshes.remove(ob2.data)
     C.view_layer.update()
 
     return volume
@@ -1263,9 +1383,10 @@ def object_oriented_algorithm(
         tot_volume += cur_volume
         cur_volume = 0
     
-    return tot_volume * 1000000
+    return tot_volume
 
 
+# The slicer algorithm.
 def slicer_algotihm(
         meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
         maxz, test=False):
@@ -1274,6 +1395,7 @@ def slicer_algotihm(
     pass
 
 
+# The liquid simulation algorithm.
 def liquid_simulation_algorithm(
         meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
         maxz, test=False):
@@ -1282,6 +1404,7 @@ def liquid_simulation_algorithm(
     pass
 
 
+# The main part of the code. Change variables and algorithms here.
 def main():
     """Execute the script."""
     time_start = time.time()
