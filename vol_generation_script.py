@@ -162,14 +162,15 @@ def print_layer_volume(test, volume):
 
 
 # Start of the space-oriented algorithm.
-def ordered_meshes():
+def ordered_meshes(selected_meshes):
     """Return the list of indices in de bpy.data.objects list of all
     objects from high to low (highest avg z-coordinate of vertices)."""
     mesh_list = []
 
-    for i, obj in enumerate(D.objects):
+    for obj in selected_meshes:
         cur_avg = np.average([vt.co[2] for vt in obj.data.vertices.values()])
-        mesh_list.append((cur_avg, i))
+        mesh_list.append((cur_avg, D.objects.values().index(obj)))
+        obj.select_set(False)
 
     return [elem[1] for elem in sorted(mesh_list, reverse=True)]
 
@@ -433,6 +434,12 @@ def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
     return [(x, y, z) for x in xs for y in ys for z in zs]
 
 
+def make_vol_prims_centers(tetra_array):
+    """For each primitive corners in the array, transform it to its center."""
+    centers = [center_tetrahedron(*verts) for verts in tetra_array]
+    return centers
+
+
 def process_voxel(
         x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
         volume_primitives, vol_primitive, threshold, closed_mesh):
@@ -526,6 +533,7 @@ def space_oriented_algorithm(
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
+    points = []
     tot_volume = 0
     max_distance = maxz - minz
     length, width, height = length / 100, width / 100, height / 100
@@ -533,13 +541,11 @@ def space_oriented_algorithm(
 
     # For all ordered mesh pairs from top to bottom, run the space-oriented
     # algorithm to get volume and list of primitives.
-    for upper_mesh, lower_mesh in zip(meshes[:-1], meshes[1:]):
+    for i, (upper_mesh, lower_mesh) in enumerate(zip(meshes[:-1], meshes[1:])):
         # Execute space-oriented algorithm between 2 meshes.
         volume, vol_prims = space_oriented_volume_between_meshes(
             length, width, height, threshold, minx, maxx, miny, maxy, minz,
             maxz, upper_mesh, lower_mesh, max_distance, primitive, closed_mesh)
-
-        # TODO: Export vol_prims as point cloud.
 
         # Print the size of the primitives used.
         print_layer_volume(test, volume)
@@ -554,7 +560,15 @@ def space_oriented_algorithm(
                            RGBAS[lower_mesh % len(RGBAS)])
             elif primitive == "tetra":
                 draw_tetrahedra(vol_prims, RGBAS[lower_mesh % len(RGBAS)])
+                vol_prims = make_vol_prims_centers(vol_prims)
 
+        vol_prims = [(x, y, z, i) for (x, y, z) in vol_prims]
+        points.extend(vol_prims)
+
+    # TODO: Export all layers as 1 point cloud, centers are the points.
+    # TODO: all points now in points array but need to be distinguished per layer -> enumerate!
+    np_points = np.asarray(points, dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"), ("layer", "i4")])
+    # print(np_points[:3])
     return tot_volume
 
 
@@ -583,7 +597,7 @@ def calc_centroid_island(island):
     return centroid
 
 
-def find_closest_island(centroid, cen_list):
+def find_closest_island(centroid, cen_list, islands, index):
     """Find element in cen_list that is closest to centroid."""
     # Initiliaze the minimum distance, minimum index in islands list and the
     # minimum center of a island.
@@ -595,7 +609,12 @@ def find_closest_island(centroid, cen_list):
     # distance in 3D space to the specific island. If this distance is smaller
     # than the current minimum distance, set it to minimum.
     for (i, c) in cen_list:
-        dist = dist_btwn_2d_pts(centroid[:2], c[:2]) 
+        # If the length differ a lot, skip that islands.
+        # if (abs(len(islands[index]) - len(islands[i])) > 
+        #         min(len(islands[index]), len(islands[i]))):
+        #     continue
+
+        dist = dist_btwn_2d_pts(centroid[:2], c[:2])
         if dist < min_dist:
             min_dist = dist
             min_index = i
@@ -604,7 +623,6 @@ def find_closest_island(centroid, cen_list):
     return min_index, min_cen, min_dist
 
 
-# TODO: does not seem to pair correctly!
 def find_mesh_pairs(islands):
     """Find pairs of vertex rings that need to be stiched together."""
     # If there are an uneven number of islands, pop the last and thus
@@ -619,16 +637,18 @@ def find_mesh_pairs(islands):
     
     # Search for pairs beginning with the largest islands. The pairs are
     # based on centroid distance.
-    pairs = []
-    not_yet_found = centroids
+    pairs, found = [], []
+
     for i, c in centroids:
-        if (i, c) in not_yet_found:
-            not_yet_found.remove((i, c))
-            j, cen, dist = find_closest_island(c, not_yet_found)
-            if dist > 0.5 or abs(len(islands[i]) - len(islands[j])) > 300:
+        if (i, c) not in found:
+            # found.append((i, c))
+            not_yet_found = [cen for cen in centroids if not cen in found and cen != (i, c)]
+            j, cen, dist = find_closest_island(c, not_yet_found, islands, i)
+            if dist > 0.25:
                 continue
             else:
-                not_yet_found.remove((j, cen))
+                found.append((i, c))
+                found.append((j, cen))
                 pairs.append([islands[i], islands[j]])
 
     return pairs
@@ -715,14 +735,41 @@ def make_next_verts(path1, path2, edges, good_verts):
     return next_vert1, next_vert2
 
 
-def correct_next_verts(next_vert1, next_vert2, wrong_verts):
+def different_paths(path1, path2, next_vert):
+    """Check if paths to next_vert are different."""
+    route1 = path1[1:]
+    end_index = path2.index(next_vert)
+    route2 = path2[1:end_index]
+    if list(set(route1) & set(route2)):
+        return False
+    
+    return True
+
+
+def correct_next_verts(next_vert1, next_vert2, wrong_verts, path1, path2):
     """Returns True if both next_verts are correct."""
     # If the next verts do not not exists or are wrong vertices, they are not
     # correct. Else they are correct.
     if not next_vert1 or not next_vert2:
         return False
-    elif next_vert1[0] in wrong_verts or next_vert2[0] in wrong_verts:
+    elif next_vert1[0] == path1[0] or next_vert2[0] == path1[0]:
         return False
+    # elif next_vert1[0] in wrong_verts and next_vert1[0] in path2[:-1]:
+    #     if different_paths(path1, path2, next_vert1[0]):
+    #         return True
+    #     else:
+    #         return False
+    # elif next_vert2[0] in wrong_verts and next_vert2[0] in path1[:-1]:
+    #     if different_paths(path2, path1, next_vert2[0]):
+    #         return True
+    #     else:
+    #         return False
+    elif next_vert1[0] in path1[:-1] or next_vert1[0] in path2[:-1]:
+        return False 
+    elif next_vert2[0] in path1[:-1] or next_vert2[0] in path2[:-1]:
+        return False 
+    # elif next_vert1[0] in wrong_verts or next_vert2[0] in wrong_verts:
+    #     return False
     
     return True
 
@@ -765,11 +812,11 @@ def small_loop_between(start, e1, e2, edges, wrong_verts, good_verts, count):
                                                  good_verts)
 
         # If there is no next vertex or it is a wrong vertex, stop the search.
-        if not correct_next_verts(next_vert1, next_vert2, wrong_verts):
+        if not correct_next_verts(next_vert1, next_vert2, wrong_verts, path1, path2):
             break
 
         # Append the next vertices to their paths.
-        path1.append(next_vert1[0])      
+        path1.append(next_vert1[0])
         path2.append(next_vert2[0])
 
         # Check if a loop is found, e.g. are there overlapping elements in the
@@ -910,35 +957,65 @@ def horizontal_edge(vector, rad):
         return True
 
     return False
- 
+
+
+def almost_same_direction(vec1, vec2):
+    """Check if vector 1 and vector 2 have almost the same direction."""
+    pos_angle = vec2.angle(vec1)
+    neg_angle = vec2.angle(-vec1)
+
+    # Direction should not differ more than 25 degrees or 0.45 radians.
+    if abs(pos_angle) < 0.45 or abs(neg_angle) < 0.45:
+        return True
+
+    return False
+
 
 def jasnom_step_1_and_2(long_mesh, short_mesh):
     """Execute step 1 and step 2 of the JASNOM algorithm between the long mesh
     and the short mesh."""
     first_edges, second_edges = [], []
-    radians = [0.6 + 0.1 * n for n in range(11)]
+    radians = [0.6 + 0.2 * n for n in range(6)]
 
     # Loop over longest mesh vertices and make edge to closest vertex on the
     # shorter mesh.
     for i, v in enumerate(long_mesh):
-        edge_found = False
-        count = 0
-        while not edge_found:
-            min_dist = math.inf
+        prev = ((i - 1) % len(long_mesh))
+        nxt = ((i + 1) % len(long_mesh))
+        base_edge1 = long_mesh[prev].co - v.co
+        base_edge2 = long_mesh[nxt].co - v.co
+        perpendicular_dir = base_edge1.cross(base_edge2)
 
+        edge_found, hor_edge_found = False, False
+        count = 0
+        min_dist, min_dist_hor = math.inf, math.inf
+
+        while not edge_found:
             for j, other_v in enumerate(short_mesh): 
                 cur_vec = other_v.co - v.co
 
+                cur_dist = dist_btwn_pts(v.co, other_v.co)
+
                 # If the edge is too horizontal dont use it.
                 if horizontal_edge(cur_vec, radians[count]):
-                    continue 
-                
+                    hor_edge_found = True
+
+                    if cur_dist < min_dist_hor:
+                        min_dist_hor = cur_dist
+                        min_edge_hor = j
+
+                    continue
+
+                # If edge is not close to perpendicular to its base edges, dont use it.
                 edge_found = True
-                cur_dist = dist_btwn_pts(v.co, other_v.co)
                 if cur_dist < min_dist:
                     min_dist = cur_dist
                     min_edge = j
-                
+
+            if edge_found:
+                if hor_edge_found and (3 * min_dist_hor) < min_dist:
+                    min_edge = min_edge_hor
+            
             count += 1
 
         first_edges.append((i, min_edge))
@@ -954,44 +1031,44 @@ def jasnom_step_1_and_2(long_mesh, short_mesh):
     return all_edges
 
 
-def try_adding_edge(prev_vert, next_vert, v_index, connected_in_this_step,
-                    not_connected, all_edges, long_mesh, short_mesh, rad):
-    """Try making an vertical edge from short mesh to lower mesh"""
-    made_edge = False
+# def try_adding_edge(prev_vert, next_vert, v_index, connected_in_this_step,
+#                     not_connected, all_edges, long_mesh, short_mesh, rad):
+#     """Try making an vertical edge from short mesh to lower mesh"""
+#     made_edge = False
 
-    for v in [prev_vert, next_vert]:
-        if made_edge:
-            continue
+#     for v in [prev_vert, next_vert]:
+#         if made_edge:
+#             continue
 
-        # If this previous vertex is connected to the long mesh, connect
-        # current vertex to 1 of its neighbours.
-        if not v in not_connected or v in connected_in_this_step:            
-            # Get neighbours in the long mesh of the previous vertex.
-            possible_vertices = [
-                v1 for (v1, v2) in all_edges if v2 == v and not
-                horizontal_edge((long_mesh[v1].co - short_mesh[v_index].co), rad)]
+#         # If this previous vertex is connected to the long mesh, connect
+#         # current vertex to 1 of its neighbours.
+#         if not v in not_connected or v in connected_in_this_step:            
+#             # Get neighbours in the long mesh of the previous vertex.
+#             possible_vertices = [
+#                 v1 for (v1, v2) in all_edges if v2 == v and not
+#                 horizontal_edge((long_mesh[v1].co - short_mesh[v_index].co), rad)]
             
-            if not possible_vertices:
-                continue
+#             if not possible_vertices:
+#                 continue
             
-            if len(possible_vertices) == 1:
-                connected_in_this_step.append(v_index)
-                all_edges.append((possible_vertices[0], v_index))
-            else:
-                # Make vectors to calculate angle between them.
-                vec1 = short_mesh[v_index].co - short_mesh[v].co
-                prevs_vecs = [long_mesh[n].co - short_mesh[v].co
-                              for n in possible_vertices]
+#             if len(possible_vertices) == 1:
+#                 connected_in_this_step.append(v_index)
+#                 all_edges.append((possible_vertices[0], v_index))
+#             else:
+#                 # Make vectors to calculate angle between them.
+#                 vec1 = short_mesh[v_index].co - short_mesh[v].co
+#                 prevs_vecs = [long_mesh[n].co - short_mesh[v].co
+#                               for n in possible_vertices]
                 
-                # Calculate the angle between possible edges and the edge from
-                # previous to current vertex and get the minimum.
-                angles = list(map(vec1.angle, prevs_vecs))
-                vert = possible_vertices[angles.index(min(angles, key=abs))]
+#                 # Calculate the angle between possible edges and the edge from
+#                 # previous to current vertex and get the minimum.
+#                 angles = list(map(vec1.angle, prevs_vecs))
+#                 vert = possible_vertices[angles.index(min(angles, key=abs))]
 
-                all_edges.append((vert, v_index))
-                connected_in_this_step.append(v_index)
+#                 all_edges.append((vert, v_index))
+#                 connected_in_this_step.append(v_index)
             
-            made_edge = True
+#             made_edge = True
  
 
 def jasnom_step_3(long_mesh, short_mesh, all_edges):
@@ -1135,11 +1212,15 @@ def jasnom_stitch(upper_mesh, lower_mesh, b_edges):
     return new_edges, new_faces
 
 
-def remove_loops_and_stitch(mesh1, mesh2, b_edges, bmsh, new_edges, new_faces):
+def remove_loops_and_stitch(mesh1, mesh2, b_edges, bmsh, new_edges, new_faces, i):
     """Remove small loops and stitch island pair together."""
     # Remove small loops in the island vertices.
     mesh1, mesh2, edges_removed, verts_removed = remove_small_loops(
         mesh1, mesh2, b_edges)
+    
+    if not mesh1 or not mesh2:
+        print(i)
+        return mesh1, mesh2, b_edges
 
     # Remove the edges and vertices that are in small loops.
     for e in edges_removed:
@@ -1165,6 +1246,42 @@ def remove_loops_and_stitch(mesh1, mesh2, b_edges, bmsh, new_edges, new_faces):
     return mesh1, mesh2, b_edges
 
 
+def overlapping_verts(verts, paired):
+    """Check if any of the vertices in verts is in a paired island."""
+    all_paired_verts = [v for island in paired for v in island]
+    return any([v in all_paired_verts for v in verts])
+
+
+def remove_single_islands(bm, singles, paired):
+    """Remove the islands that are not paired with any other island."""
+    for i, s in enumerate(singles):
+        verts, new_verts = s, s
+        new_verts_added = True
+        count = 0
+
+        while new_verts_added:
+            count += 1
+            old_length = len(verts)
+
+            # print("Verts: ", verts)
+            # print("New verts: ", new_verts)
+            print("Index: %d, depth: %d" % (i, count))
+
+            for v in new_verts:
+                if v.is_valid:
+                    verts.extend([e.other_vert(v) for e in v.link_edges
+                                  if e.other_vert(v) != None and e.other_vert(v) not in verts])
+
+            new_length = len(verts)
+            new_verts_added = new_length > old_length
+            new_verts = verts[-(new_length - old_length):]
+
+        if not overlapping_verts(verts, paired):
+            for v in verts:
+                if v.is_valid:
+                    bm.verts.remove(v)
+
+
 def remove_small_islands(obj):
     """Remove small islands from the mesh."""
     for ob in D.objects:
@@ -1176,7 +1293,7 @@ def remove_small_islands(obj):
 
     # Remove all objects which are too small, <50 vertices.
     for o in C.selected_objects:
-        if len(o.data.vertices) < 400:
+        if len(o.data.vertices) < 1000:
             D.meshes.remove(o.data)
 
     # Join the remaining big objects together.
@@ -1215,17 +1332,47 @@ def make_mesh_manifold(bm):
     # Calculate vertex islands (loose parts) based on the boundary vertices and
     # sort them from large to small.
     islands = [island for island in get_islands(bm, verts=b_verts)["islands"]]
-    islands = sorted(islands, key=len, reverse=True)
-    
+    islands.sort(key=len, reverse=True)
+
+    # island_lengths = [len(isle) for isle in islands]
+    # print(island_lengths[:30])
     # Create pairs of island vertices that are close together.
     island_pairs = find_mesh_pairs(islands)
+    paired_islands = [isle for tup in island_pairs for isle in tup if len(isle) < 500]
+    single_islands = [isle for isle in islands if isle not in paired_islands]
+    # s_no_doubles = [s for i, s in enumerate(single_islands) if s not in single_islands[:i]]
+    # print("There are %d islands and %d single islands!" % (len(islands), len(single_islands)))
+    # remove_single_islands(bm, single_islands, paired_islands)
+
+    # TODO: remove islands not in islands_pairs!
+
+    # all_edges_in_pair = [e for e in b_edges if e[0] in pair and e[1] in pair]
+    # TODO: try bmesh.ops.triangle_fill(bm, use_beauty=True, use_dissolve=False, edges=all_edges_in_pair)
+    # pair_lengths = [(len(up), len(down)) for [up, down] in island_pairs]
+    # print(pair_lengths[:30])
+
+    # for msh in island_pairs[1]:
+    #     # v.hide = False
+    #     # v.select = True
+    #     for v in msh:
+    #         v.hide = False
+    #         v.select = True
+        # for v in low:
+        #     v.hide = False
+        #     v.select = True
 
     # Stitch the pairs together using the JASNOM algorithm.
     new_edges, new_faces = [], []
-    for [upper_mesh, lower_mesh] in island_pairs:
+    for i, [upper_mesh, lower_mesh] in enumerate(island_pairs):
+        # upper_edges = [e for e in b_edges if e.verts[0] in upper_mesh and e.verts[1] in upper_mesh]
+        # lower_edges = [e for e in b_edges if e.verts[0] in lower_mesh and e.verts[1] in lower_mesh]
+        # all_edges_in_pair = [e for e in b_edges if e[0] in pair and e[1] in pair]
+        # TODO: try bmesh.ops.triangle_fill(bm, use_beauty=True, use_dissolve=False, edges=all_edges_in_pair)
+        # bmesh.ops.bridge_loops(bm, edges=upper_edges + lower_edges, twist_offset=1)
         upper_mesh, lower_mesh, b_edges = remove_loops_and_stitch(
-            upper_mesh, lower_mesh, b_edges, bm, new_edges, new_faces)
-    
+            upper_mesh, lower_mesh, b_edges, bm, new_edges, new_faces, i)
+        
+    # bmesh.ops.edgenet_fill(bm, edges=new_edges)
     # Add new edges and faces to the mesh.
     for edge in new_edges:
         if bm.edges.get(edge) == None:
@@ -1234,6 +1381,24 @@ def make_mesh_manifold(bm):
     for face in new_faces:
         if bm.faces.get(face) == None:
             bm.faces.new(face)
+
+    # remove_single_islands(bm, single_islands, paired_islands)
+
+    for v in bm.verts:
+        v.hide = True
+    for e in bm.edges:
+        e.hide = True
+    for f in bm.faces:
+        f.hide = True
+
+    for msh in island_pairs[9]:
+        for v in msh:
+            v.hide = False
+            v.select = False
+    # for isle in single_islands:
+    #     for v in isle:
+    #         v.hide = False
+    #         v.select = True
 
     return bm
 
@@ -1254,12 +1419,19 @@ def process_objects(obj1, obj2):
     else:
         combi = make_mesh_manifold(combi)
 
-    # bmesh.ops.holes_fill()
     # Write data to obj1.
+    # bmesh.ops.holes_fill(bm, edges=bm.edges, sides=3)
+    # TODO: remove again small islands
     combi.to_mesh(ob1.data)
+    ob1 = remove_small_islands(ob1)
+
     # ob1 = fill_in_holes(ob1)
+    # bpy.ops.mesh.print3d_clean_non_manifold()
+
     combi.normal_update()
     volume = combi.calc_volume()
+    # b_edges = find_boundary_edges(combi)
+    # print("After stitching ", len(b_edges))
     combi.free()
 
     # Remove obj2 and update view layer.
@@ -1383,7 +1555,7 @@ def object_oriented_algorithm(
         tot_volume += cur_volume
         cur_volume = 0
     
-    return tot_volume
+    return tot_volume * 1000000
 
 
 # The slicer algorithm.
@@ -1409,17 +1581,11 @@ def main():
     """Execute the script."""
     time_start = time.time()
 
+    selected_meshes = C.selected_objects
     init()
 
     # Set info about threshold (in cm) for reducing the bounding box.
     threshold = 5
-
-    # Set number of primitives to divide the bounding box.
-    # num_x, num_y, num_z = 150, 150, 50
-
-    # Size in centimeters for the primitives.
-    # length, width, height = 5, 5, 5
-    # print_primitive_size(length, width, height)
 
     # Determine bounding box and translate scene to origin.
     minx, maxx, miny, maxy, minz, maxz = bounding_box()
@@ -1430,15 +1596,26 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-    # Run the object-oriented algorithm.
-    volume = object_oriented_algorithm(
-        ordered_meshes(), threshold, minx, maxx, miny, maxy, minz, maxz)
-    
-    # Run the space-oriented algorithm with the assigned primitive.
-    # primitive = "voxel"
-    # volume = space_oriented_algorithm(
-    #     ordered_meshes(), length, width, height, threshold, minx, maxx, miny,
-    #     maxy, minz, maxz, primitive=primitive)
+    method = "object"  # or "space"
+
+    if method == "space":
+        # Set number of primitives to divide the bounding box.
+        # num_x, num_y, num_z = 150, 150, 50
+
+        # Size in centimeters for the primitives.
+        length, width, height = 5, 5, 5
+        print_primitive_size(length, width, height)
+
+        # Run the space-oriented algorithm with the assigned primitive.
+        primitive = "voxel"  # or "tetra"
+        volume = space_oriented_algorithm(
+            ordered_meshes(selected_meshes), length, width, height, threshold,
+            minx, maxx, miny, maxy, minz, maxz, primitive=primitive)
+    elif method == "object":
+        # Run the object-oriented algorithm.
+        volume = object_oriented_algorithm(
+            ordered_meshes(selected_meshes), threshold, minx, maxx, miny, maxy,
+            minz, maxz)
 
     print_total_volume(volume)
 
