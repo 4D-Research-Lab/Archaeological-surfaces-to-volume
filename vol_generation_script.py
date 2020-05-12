@@ -446,6 +446,7 @@ def process_voxel(
     """Determine if voxel is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
+    upper_mesh, lower_mesh = update_indices(upper_mesh, lower_mesh, "cubic")
 
     # Determine center of voxel.
     center = (x+l/2, y+w/2, z+h/2)
@@ -470,6 +471,7 @@ def process_tetra(
     """Determine if tetra is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
+    upper_mesh, lower_mesh = update_indices(upper_mesh, lower_mesh, "tetra")
 
     # Get all vertices for the 6 tetrahedra.
     v1, v2 = (x, y, z), (x + l, y + w, z + h)
@@ -609,11 +611,6 @@ def find_closest_island(centroid, cen_list, islands, index):
     # distance in 3D space to the specific island. If this distance is smaller
     # than the current minimum distance, set it to minimum.
     for (i, c) in cen_list:
-        # If the length differ a lot, skip that islands.
-        # if (abs(len(islands[index]) - len(islands[i])) > 
-        #         min(len(islands[index]), len(islands[i]))):
-        #     continue
-
         dist = dist_btwn_2d_pts(centroid[:2], c[:2])
         if dist < min_dist:
             min_dist = dist
@@ -754,22 +751,8 @@ def correct_next_verts(next_vert1, next_vert2, wrong_verts, path1, path2):
         return False
     elif next_vert1[0] == path1[0] or next_vert2[0] == path1[0]:
         return False
-    # elif next_vert1[0] in wrong_verts and next_vert1[0] in path2[:-1]:
-    #     if different_paths(path1, path2, next_vert1[0]):
-    #         return True
-    #     else:
-    #         return False
-    # elif next_vert2[0] in wrong_verts and next_vert2[0] in path1[:-1]:
-    #     if different_paths(path2, path1, next_vert2[0]):
-    #         return True
-    #     else:
-    #         return False
-    elif next_vert1[0] in path1[:-1] or next_vert1[0] in path2[:-1]:
-        return False 
-    elif next_vert2[0] in path1[:-1] or next_vert2[0] in path2[:-1]:
-        return False 
-    # elif next_vert1[0] in wrong_verts or next_vert2[0] in wrong_verts:
-    #     return False
+    elif next_vert1[0] in wrong_verts or next_vert2[0] in wrong_verts:
+        return False
     
     return True
 
@@ -831,6 +814,39 @@ def small_loop_between(start, e1, e2, edges, wrong_verts, good_verts, count):
     return loop_found, verts
 
 
+def find_double_loop(start, edges, still_wrong_verts):
+    """Find a loop that is between 2 vertices."""
+    start_edges = [e for e in edges if start in e.verts]
+    paths = []
+
+    # Make all 4 paths from the 4 different edges to a vertex in wrong_verts.
+    for e in start_edges:
+        found_path = False
+        p = [start, e.other_vert(start)]
+        
+        while not found_path:
+            next_vert = [e.other_vert(p[-1]) for e in edges
+                         if p[-1] in e.verts and not p[-2] in e.verts]
+            p.append(next_vert[0])
+            if p[-1] in still_wrong_verts:
+                found_path = True
+                paths.append(p)
+    
+    # Get the target vertex and the 2 shortest paths toward it.
+    path_ends = [p[-1] for p in paths]
+    other_v = list(set([v for v in path_ends if path_ends.count(v) > 1]))[0]
+    end_edges = [e for e in edges if other_v in e.verts]
+    paths_to_other_v = [p for p in paths if p[-1] == other_v]
+    paths_to_other_v.sort(key=len)
+    shortest_paths = paths_to_other_v[:2]
+
+    # Get loop vertices and loop edges and return them.
+    loop_verts = [v for p in shortest_paths for v in p if v not in still_wrong_verts]
+    loop_edges = [e for e in start_edges if e.other_vert(start) in loop_verts]
+    loop_edges += [e for e in end_edges if e.other_vert(other_v) in loop_verts]
+    return loop_verts, loop_edges, other_v    
+
+
 def remove_loops(mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
                  wrong_verts, combinations, counts):
     """Remove small loops from a vertex island."""
@@ -872,6 +888,19 @@ def remove_loops(mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
         i += 1
         if i >= len(counts):
             break
+    
+    # Find double loops if there are still wrong vertices that have not been
+    # removed.
+    still_wrong_verts = [v for v in wrong_verts if v not in verts_found]
+    still_wrong_found = []
+    for v in still_wrong_verts:
+        if not v in still_wrong_found:
+            still_wrong_found.append(v)
+            loop_verts, loop_edges, other_v = find_double_loop(
+                v, b_edges, still_wrong_verts)
+            edges_to_be_removed.extend(loop_edges)
+            verts_to_be_removed.extend(loop_verts)
+            still_wrong_found.append(other_v)
 
 
 def remove_small_loops(upper_mesh, lower_mesh, b_edges):
@@ -980,12 +1009,6 @@ def jasnom_step_1_and_2(long_mesh, short_mesh):
     # Loop over longest mesh vertices and make edge to closest vertex on the
     # shorter mesh.
     for i, v in enumerate(long_mesh):
-        prev = ((i - 1) % len(long_mesh))
-        nxt = ((i + 1) % len(long_mesh))
-        base_edge1 = long_mesh[prev].co - v.co
-        base_edge2 = long_mesh[nxt].co - v.co
-        perpendicular_dir = base_edge1.cross(base_edge2)
-
         edge_found, hor_edge_found = False, False
         count = 0
         min_dist, min_dist_hor = math.inf, math.inf
@@ -1029,46 +1052,6 @@ def jasnom_step_1_and_2(long_mesh, short_mesh):
         
     all_edges = list(set(first_edges + second_edges))
     return all_edges
-
-
-# def try_adding_edge(prev_vert, next_vert, v_index, connected_in_this_step,
-#                     not_connected, all_edges, long_mesh, short_mesh, rad):
-#     """Try making an vertical edge from short mesh to lower mesh"""
-#     made_edge = False
-
-#     for v in [prev_vert, next_vert]:
-#         if made_edge:
-#             continue
-
-#         # If this previous vertex is connected to the long mesh, connect
-#         # current vertex to 1 of its neighbours.
-#         if not v in not_connected or v in connected_in_this_step:            
-#             # Get neighbours in the long mesh of the previous vertex.
-#             possible_vertices = [
-#                 v1 for (v1, v2) in all_edges if v2 == v and not
-#                 horizontal_edge((long_mesh[v1].co - short_mesh[v_index].co), rad)]
-            
-#             if not possible_vertices:
-#                 continue
-            
-#             if len(possible_vertices) == 1:
-#                 connected_in_this_step.append(v_index)
-#                 all_edges.append((possible_vertices[0], v_index))
-#             else:
-#                 # Make vectors to calculate angle between them.
-#                 vec1 = short_mesh[v_index].co - short_mesh[v].co
-#                 prevs_vecs = [long_mesh[n].co - short_mesh[v].co
-#                               for n in possible_vertices]
-                
-#                 # Calculate the angle between possible edges and the edge from
-#                 # previous to current vertex and get the minimum.
-#                 angles = list(map(vec1.angle, prevs_vecs))
-#                 vert = possible_vertices[angles.index(min(angles, key=abs))]
-
-#                 all_edges.append((vert, v_index))
-#                 connected_in_this_step.append(v_index)
-            
-#             made_edge = True
  
 
 def jasnom_step_3(long_mesh, short_mesh, all_edges):
@@ -1143,56 +1126,26 @@ def make_jasnom_faces(long_mesh, short_mesh, new_edges, b_edges):
     # For all vertices in the long mesh, check if it has multiple edges to the
     # short mesh. If so, make the faces for these edges.
     for v in long_mesh:
-        edges_with_v = [e for e in new_edges if v == e[0]] # or v == e[1]]
+        edges_with_v = [e for e in new_edges if v == e[0]]
         if len(edges_with_v) >= 2:
             verts = [e[1] for e in edges_with_v]
-            edges = [(v1, v2) for v1, v2 in itertools.combinations(verts, 2) if (v1, v2) in vertex_pairs or (v2, v1) in vertex_pairs]
+            edges = [(v1, v2) for v1, v2 in itertools.combinations(verts, 2)
+                     if (v1, v2) in vertex_pairs or (v2, v1) in vertex_pairs]
 
             for v1, v2 in edges:
                 new_faces.append((v, v1, v2))
-            # TODO: check which verts make edges in short mesh.
-            # verts.sort(key=short_mesh.index)
-
-            # verts_indices = [short_mesh.index(v) for v in verts]
-            # if 0 in verts_indices and (len(short_mesh) - 1) in verts_indices:
-            #     found = True
-            #     ind = 1
-            #     while found:
-            #         if not ind in verts_indices:
-            #             break
-            #         else:
-            #             ind += 1
-
-            #     verts = verts[ind:] + verts[:ind]
-            # while len(verts) >= 2:
-            #     new_faces.append((v, verts.pop(0), verts[0]))
 
     # For all vertices in the short mesh, check if it has multiple edges to the
     # long mesh. If so, make the faces for these edges.
     for v in short_mesh:
-        edges_with_v = [e for e in new_edges if v == e[1]] # or v == e[1]]
+        edges_with_v = [e for e in new_edges if v == e[1]]
         if len(edges_with_v) >= 2:
             verts = [e[0] for e in edges_with_v]
-            edges = [(v1, v2) for v1, v2 in itertools.combinations(verts, 2) if (v1, v2) in vertex_pairs or (v2, v1) in vertex_pairs]
+            edges = [(v1, v2) for v1, v2 in itertools.combinations(verts, 2)
+                     if (v1, v2) in vertex_pairs or (v2, v1) in vertex_pairs]
 
             for v1, v2 in edges:
                 new_faces.append((v, v1, v2))
-            # # verts = [e[0] if v == e[1] else e[1] for e in edges_with_v]
-            # verts.sort(key=long_mesh.index)
-
-            # verts_indices = [long_mesh.index(v) for v in verts]
-            # if 0 in verts_indices and (len(long_mesh) - 1) in verts_indices:
-            #     found = True
-            #     ind = 1
-            #     while found:
-            #         if not ind in verts_indices:
-            #             break
-            #         else:
-            #             ind += 1
-
-            #     verts = verts[ind:] + verts[:ind]
-            # while len(verts) >= 2: 
-            #     new_faces.append((v, verts.pop(0), verts[0]))
     
     return new_faces
 
@@ -1217,10 +1170,6 @@ def remove_loops_and_stitch(mesh1, mesh2, b_edges, bmsh, new_edges, new_faces, i
     # Remove small loops in the island vertices.
     mesh1, mesh2, edges_removed, verts_removed = remove_small_loops(
         mesh1, mesh2, b_edges)
-    
-    if not mesh1 or not mesh2:
-        print(i)
-        return mesh1, mesh2, b_edges
 
     # Remove the edges and vertices that are in small loops.
     for e in edges_removed:
@@ -1322,6 +1271,13 @@ def fill_in_holes(obj):
 
 def make_mesh_manifold(bm):
     """Make the received mesh manifold."""
+    # for v in bm.verts:
+    #     v.hide = True
+    # for e in bm.edges:
+    #     e.hide = True
+    # for f in bm.faces:
+    #     f.hide = True
+
     # Remove loose edges and vertices.
     remove_loose_parts(bm)
 
@@ -1338,8 +1294,8 @@ def make_mesh_manifold(bm):
     # print(island_lengths[:30])
     # Create pairs of island vertices that are close together.
     island_pairs = find_mesh_pairs(islands)
-    paired_islands = [isle for tup in island_pairs for isle in tup if len(isle) < 500]
-    single_islands = [isle for isle in islands if isle not in paired_islands]
+    # paired_islands = [isle for tup in island_pairs for isle in tup if len(isle) < 500]
+    # single_islands = [isle for isle in islands if isle not in paired_islands]
     # s_no_doubles = [s for i, s in enumerate(single_islands) if s not in single_islands[:i]]
     # print("There are %d islands and %d single islands!" % (len(islands), len(single_islands)))
     # remove_single_islands(bm, single_islands, paired_islands)
@@ -1384,17 +1340,17 @@ def make_mesh_manifold(bm):
 
     # remove_single_islands(bm, single_islands, paired_islands)
 
-    for v in bm.verts:
-        v.hide = True
-    for e in bm.edges:
-        e.hide = True
-    for f in bm.faces:
-        f.hide = True
+    # for v in bm.verts:
+    #     v.hide = True
+    # for e in bm.edges:
+    #     e.hide = True
+    # for f in bm.faces:
+    #     f.hide = True
 
-    for msh in island_pairs[9]:
-        for v in msh:
-            v.hide = False
-            v.select = False
+    # for msh in island_pairs[9]:
+    #     for v in msh:
+    #         v.hide = False
+    #         v.select = False
     # for isle in single_islands:
     #     for v in isle:
     #         v.hide = False
@@ -1421,7 +1377,6 @@ def process_objects(obj1, obj2):
 
     # Write data to obj1.
     # bmesh.ops.holes_fill(bm, edges=bm.edges, sides=3)
-    # TODO: remove again small islands
     combi.to_mesh(ob1.data)
     ob1 = remove_small_islands(ob1)
 
@@ -1430,8 +1385,6 @@ def process_objects(obj1, obj2):
 
     combi.normal_update()
     volume = combi.calc_volume()
-    # b_edges = find_boundary_edges(combi)
-    # print("After stitching ", len(b_edges))
     combi.free()
 
     # Remove obj2 and update view layer.
