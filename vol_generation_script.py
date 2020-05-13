@@ -5,6 +5,9 @@
 # Made by Bram Dekker (11428279) of the Univeristy of Amsterdam as a bachelor
 # thesis.
 
+# bpy, bmesh and mathutils are standard available in Blender's Python
+# environment. Thus these modules dont have to be installed separately if the
+# script is run inside Blender.
 import bpy
 import bmesh
 import mathutils
@@ -19,6 +22,8 @@ sys.setrecursionlimit(2500)
 C = bpy.context
 D = bpy.data
 
+# Colors used to color the different layers. Feel free to add new RGBA colors
+# to the RGBAS array or change them if you dont like certain colors.
 RED = (1, 0, 0, 1)
 GREEN = (0, 1, 0, 1)
 BLUE = (0, 0, 1, 1)
@@ -174,6 +179,15 @@ def ordered_meshes(selected_meshes):
         obj.select_set(False)
 
     return [elem[1] for elem in sorted(mesh_list, reverse=True)]
+
+
+def export_ply_file(points, file_name):
+    """Export the center points of the mesh as a pointcloud in a ply file. The
+    file is saved in the Downloads folder with the name file_name."""
+    np_points = np.asarray(points, dtype=[("x", "f4"), ("y", "f4"),
+                                          ("z", "f4"), ("layer", "i4")])
+    vertex = PlyElement.describe(np_points, "vertex")
+    PlyData([vertex], text=True).write("Downloads/" + file_name)
 
 
 def dist_btwn_pts(p1, p2):
@@ -377,18 +391,25 @@ def set_vol_primitive(length, width, height, primitive):
     return vol_primitive
 
 
-def check_outside_mesh(upper_mesh, center, max_distance):
-    """Check if center lays outside closed mesh or not."""
+def check_inside_mesh(mesh, center, max_distance, direc="up"):
+    """Check if center lays inside closed mesh or not."""
     hit = True
     hit_count = 0
     cast_point = center
-    adder = (0, 0, 0.001)
+
+    # Set appropriate ray direction and adder.
+    if direc == "up":
+        adder = (0, 0, 0.001)
+        ray_direction = (0, 0, 1)
+    elif direc == "down":
+        adder = (0, 0, -0.001)
+        ray_direction = (0, 0, -1)
 
     # Cast rays as long as it hits the mesh. Count the amount of times the ray
     # hits the mesh.
     while hit:
-        cast_result = D.objects[upper_mesh].ray_cast(
-            cast_point, (0, 0, 1), distance=max_distance)
+        cast_result = D.objects[mesh].ray_cast(
+            cast_point, ray_direction, distance=max_distance)
 
         if cast_result[0]:
             hit_count += 1
@@ -396,18 +417,14 @@ def check_outside_mesh(upper_mesh, center, max_distance):
         else:
             hit = False
 
-    # If there are an even amount of hits, center is not inside the closed
+    # If there are an uneven amount of hits, center is inside the closed
     # mesh and thus True is returned.
-    return (hit_count % 2) == 0
+    return (hit_count % 2) == 1
 
 
-def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold,
-                     closed_mesh):
+def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold):
     """Decide if the primitive on the given position belongs to the volume
     between the meshes."""
-    if closed_mesh and check_outside_mesh(upper_mesh, center, max_distance):
-        return False
-
     # Cast ray up to upper mesh and ray down to lower mesh.
     res_up = D.objects[upper_mesh].ray_cast(
         center, (0, 0, 1), distance=max_distance)
@@ -415,8 +432,9 @@ def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold,
         center, (0, 0, -1), distance=max_distance)
 
     # If both rays hit the mesh, centroid is in between the meshes.
-    if (res_up[0] and res_down[0] and
-            dist_btwn_pts(res_up[1], res_down[1]) >= threshold):
+    if (check_inside_mesh(upper_mesh, center, max_distance, direc="up") and
+            check_inside_mesh(lower_mesh, center, max_distance, direc="down")
+            and dist_btwn_pts(res_up[1], res_down[1]) >= threshold):
         in_volume = True
     else:
         in_volume = False
@@ -443,7 +461,7 @@ def make_vol_prims_centers(tetra_array):
 
 def process_voxel(
         x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-        volume_primitives, vol_primitive, threshold, closed_mesh):
+        volume_primitives, vol_primitive, threshold):
     """Determine if voxel is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -454,8 +472,7 @@ def process_voxel(
 
     # Decide if voxel is part of the volume.
     in_volume = decide_in_volume(
-        upper_mesh, lower_mesh, center, max_distance, threshold,
-        closed_mesh)
+        upper_mesh, lower_mesh, center, max_distance, threshold)
 
     # If the voxel is part of the volume, add it to the primitive list and set
     # the volume.
@@ -468,7 +485,7 @@ def process_voxel(
 
 def process_tetra(
         x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-        volume_primitives, vol_primitive, threshold, closed_mesh):
+        volume_primitives, vol_primitive, threshold):
     """Determine if tetra is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -484,8 +501,7 @@ def process_tetra(
 
         # Decide if the tetrahedron is part of the volume.
         in_volume = decide_in_volume(
-            upper_mesh, lower_mesh, center, max_distance, threshold,
-            closed_mesh)
+            upper_mesh, lower_mesh, center, max_distance, threshold)
 
         # If the tetrahedron is part of the volume, add it to the primitive
         # list and add its volume to the volume variable.
@@ -496,18 +512,9 @@ def process_tetra(
     return volume
 
 
-def export_ply_file(points, file_name):
-    """Export the center points of the mesh as a pointcloud in a ply file. The
-    file is saved in the Downloads folder with the name file_name."""
-    np_points = np.asarray(points, dtype=[("x", "f4"), ("y", "f4"),
-                                          ("z", "f4"), ("layer", "i4")])
-    vertex = PlyElement.describe(np_points, "vertex")
-    PlyData([vertex], text=True).write("Downloads/" + file_name)
-
-
 def space_oriented_volume_between_meshes(
         length, width, height, threshold, minx, maxx, miny, maxy, minz, maxz,
-        upper_mesh, lower_mesh, max_distance, primitive, closed_mesh):
+        upper_mesh, lower_mesh, max_distance, primitive):
     """Calculate the volume and make a 3D model of the volume between 2
     meshes."""
     # Initialize volume primitives list and the volume.
@@ -528,21 +535,21 @@ def space_oriented_volume_between_meshes(
             # Check if current voxel is part of the volume.
             cur_volume += process_voxel(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive, threshold, closed_mesh)
+                volume_primitives, vol_primitive, threshold)
         elif primitive == "tetra":
             # Check which tetrahedra in the current voxel are part of the
             # volume.
             cur_volume += process_tetra(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive, threshold, closed_mesh)
+                volume_primitives, vol_primitive, threshold)
 
     return cur_volume, volume_primitives
 
 
 def space_oriented_algorithm(
         meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
-        maxz, primitive="voxel", draw=True, test=False, closed_mesh=False,
-        export=False, ply_name="pointmesh.ply"):
+        maxz, primitive="voxel", draw=True, test=False, export=False,
+        ply_name="pointmesh.ply"):
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
@@ -558,7 +565,7 @@ def space_oriented_algorithm(
         # Execute space-oriented algorithm between 2 meshes.
         volume, vol_prims = space_oriented_volume_between_meshes(
             length, width, height, threshold, minx, maxx, miny, maxy, minz,
-            maxz, upper_mesh, lower_mesh, max_distance, primitive, closed_mesh)
+            maxz, upper_mesh, lower_mesh, max_distance, primitive)
 
         # Print the size of the primitives used.
         print_layer_volume(test, volume)
@@ -788,7 +795,7 @@ def small_loop_between(start, e1, e2, edges, wrong_verts, good_verts, count):
     """Determines if there exists a small loop between e1 and e2."""
     # Initialize 2 paths from the start vertex with 4 boundary edges connected
     # to it.
-    path1 = [start, e1.other_vert(start)] 
+    path1 = [start, e1.other_vert(start)]
     path2 = [start, e2.other_vert(start)]
 
     # Initialize the loop_found and verts that are in the loop variables.
@@ -857,7 +864,7 @@ def find_double_loop(start, edges, still_wrong_verts):
                   if v not in still_wrong_verts]
     loop_edges = [e for e in start_edges if e.other_vert(start) in loop_verts]
     loop_edges += [e for e in end_edges if e.other_vert(other_v) in loop_verts]
-    return loop_verts, loop_edges, other_v    
+    return loop_verts, loop_edges, other_v
 
 
 def remove_loops(mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
@@ -883,7 +890,7 @@ def remove_loops(mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
                     v, edge1, edge2, b_edges,
                     [v for v in wrong_verts if v not in verts_found],
                     mesh, count)
-                
+
                 # If a loop is found, add edges and vertices in the loop to the
                 # to_be_removed lists. Also remove the vertices from the
                 # current mesh and add the start vertex to verts_found.
@@ -895,13 +902,13 @@ def remove_loops(mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
                             mesh.remove(vert)
                     verts_found.append(v)
                     break
-        
+
         # If the incrementer exceeds the length of counts, break. Remaining
         # loops are too big to be found -> increase counts if necessary.
         i += 1
         if i >= len(counts):
             break
-    
+
     # Find double loops if there are still wrong vertices that have not been
     # removed.
     still_wrong_verts = [v for v in wrong_verts if v not in verts_found]
@@ -931,15 +938,15 @@ def remove_small_loops(upper_mesh, lower_mesh, b_edges):
 
     # Make combinations of the edges, based on 4 edges.
     combinations = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
-    
+
     # Make a count list, so that first the smallest loops are found.
     counts = [2**n for n in range(6)]
-    
+
     # Remove loops in the upper mesh.
     remove_loops(
         upper_mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
         upper_wrong_verts, combinations, counts)
-    
+
     # Remove loops in the lower mesh.
     remove_loops(
         lower_mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
@@ -959,7 +966,7 @@ def sort_vert_list(sorted_list, unsorted, boundary_edges):
         cur_vert = sorted_list[-1]
         edges = [e for e in boundary_edges if cur_vert in e.verts]
         connected = [e.other_vert(cur_vert) for e in edges]
-        
+
         # If the length of the sorted is 1, just add the first connected
         # vertex. Else add the one not yet in the sorted list.
         if len(sorted_list) == 1:
@@ -974,7 +981,7 @@ def sort_vert_lists(upper_mesh, lower_mesh, b_edges):
     each other, are also next to each other in the list."""
     # Initialize the lists with the vertex at index 0.
     up, low = [upper_mesh[0]], [lower_mesh[0]]
-    
+
     # Sort both island vertices.
     sort_vert_list(up, upper_mesh, b_edges)
     sort_vert_list(low, lower_mesh, b_edges)
@@ -993,7 +1000,7 @@ def horizontal_edge(vector, rad):
     """Check if the edge is too horinzontal."""
     up = mathutils.Vector((0, 0, 1))
     down = mathutils.Vector((0, 0, -1))
-    
+
     # Edge must be upwards or downwards with an angle <0.6 radians.
     if abs(up.angle(vector)) > rad and abs(down.angle(vector)) > rad:
         return True
@@ -1027,7 +1034,7 @@ def jasnom_step_1_and_2(long_mesh, short_mesh):
         min_dist, min_dist_hor = math.inf, math.inf
 
         while not edge_found:
-            for j, other_v in enumerate(short_mesh): 
+            for j, other_v in enumerate(short_mesh):
                 cur_vec = other_v.co - v.co
 
                 cur_dist = dist_btwn_pts(v.co, other_v.co)
@@ -1042,7 +1049,8 @@ def jasnom_step_1_and_2(long_mesh, short_mesh):
 
                     continue
 
-                # If edge is not close to perpendicular to its base edges, dont use it.
+                # If edge is not close to perpendicular to its base edges,
+                # dont use it.
                 edge_found = True
                 if cur_dist < min_dist:
                     min_dist = cur_dist
@@ -1279,7 +1287,9 @@ def fill_in_holes(obj):
 
     # Select only the specified object and fill its holes.
     obj.select_set(True)
-    bpy.ops.mesh.fill_holes(sides=3)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.fill_holes(sides=0)
+    bpy.ops.object.mode_set(mode="OBJECT")
 
     return obj
 
@@ -1390,9 +1400,14 @@ def process_objects(obj1, obj2):
     else:
         combi = make_mesh_manifold(combi)
 
+    # non_manifold_edges = [e for e in combi.edges if not e.is_manifold]
+    # for e in non_manifold_edges:
+    #     e.hide = False
+    #     e.smooth = False
     # Write data to obj1.
-    # bmesh.ops.holes_fill(bm, edges=bm.edges, sides=3)
+    # bmesh.ops.holes_fill(combi, edges=find_boundary_edges(combi), sides=0)
     combi.to_mesh(ob1.data)
+    
     ob1 = remove_small_islands(ob1)
 
     # ob1 = fill_in_holes(ob1)
@@ -1564,7 +1579,7 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-    method = "space"  # or "space"
+    method = "object"  # or "space"
 
     if method == "space":
         # Set number of primitives to divide the bounding box.

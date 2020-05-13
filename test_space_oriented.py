@@ -99,8 +99,7 @@ def vol_test_space_oriented(object_list, length, width, height, threshold,
             ind = D.objects.keys().index(name)
             vol = space_oriented_algorithm(
                 [ind, ind], length, width, height, threshold, minx, maxx, miny,
-                maxy, minz, maxz, primitive=prim, draw=draw_test, test=test,
-                closed_mesh=True)
+                maxy, minz, maxz, primitive=prim, draw=draw_test, test=test)
             translate_volume(prim, j, i)
             vol_dif = abs(obj_vol - vol)
 
