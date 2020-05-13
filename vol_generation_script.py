@@ -12,6 +12,7 @@ import time
 import math
 import numpy as np
 import itertools
+from plyfile import PlyData, PlyElement
 import sys
 sys.setrecursionlimit(2500)
 
@@ -43,10 +44,10 @@ def init(test=False):
 
 def is_volume(obj):
     """Check if object is a generated volume or not."""
-    if (obj.name.startswith("triangle_mesh") or 
+    if (obj.name.startswith("triangle_mesh") or
             obj.name.startswith("cubic") or obj.name.startswith("tetra")):
         return True
-    
+
     return False
 
 
@@ -151,7 +152,7 @@ def print_num_primitives(num_x, num_y, num_z):
 
 def print_primitive_size(length, width, height):
     """Print the size of the primitive used."""
-    print("Primitive size: %.2f x %.2f x %.2f" % (length, width, height))
+    print("Primitive size: %.2f x %.2f x %.2f cm" % (length, width, height))
 
 
 def print_layer_volume(test, volume):
@@ -495,6 +496,15 @@ def process_tetra(
     return volume
 
 
+def export_ply_file(points, file_name):
+    """Export the center points of the mesh as a pointcloud in a ply file. The
+    file is saved in the Downloads folder with the name file_name."""
+    np_points = np.asarray(points, dtype=[("x", "f4"), ("y", "f4"),
+                                          ("z", "f4"), ("layer", "i4")])
+    vertex = PlyElement.describe(np_points, "vertex")
+    PlyData([vertex], text=True).write("Downloads/" + file_name)
+
+
 def space_oriented_volume_between_meshes(
         length, width, height, threshold, minx, maxx, miny, maxy, minz, maxz,
         upper_mesh, lower_mesh, max_distance, primitive, closed_mesh):
@@ -531,7 +541,8 @@ def space_oriented_volume_between_meshes(
 
 def space_oriented_algorithm(
         meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
-        maxz, primitive="voxel", draw=True, test=False, closed_mesh=False):
+        maxz, primitive="voxel", draw=True, test=False, closed_mesh=False,
+        export=False, ply_name="pointmesh.ply"):
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
@@ -564,13 +575,13 @@ def space_oriented_algorithm(
                 draw_tetrahedra(vol_prims, RGBAS[lower_mesh % len(RGBAS)])
                 vol_prims = make_vol_prims_centers(vol_prims)
 
-        vol_prims = [(x, y, z, i) for (x, y, z) in vol_prims]
-        points.extend(vol_prims)
+        if export:
+            vol_prims = [(x, y, z, i) for (x, y, z) in vol_prims]
+            points.extend(vol_prims)
 
-    # TODO: Export all layers as 1 point cloud, centers are the points.
-    # TODO: all points now in points array but need to be distinguished per layer -> enumerate!
-    np_points = np.asarray(points, dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"), ("layer", "i4")])
-    # print(np_points[:3])
+    if export:
+        export_ply_file(points, ply_name)
+
     return tot_volume
 
 
@@ -616,7 +627,7 @@ def find_closest_island(centroid, cen_list, islands, index):
             min_dist = dist
             min_index = i
             min_cen = c
-    
+
     return min_index, min_cen, min_dist
 
 
@@ -631,15 +642,15 @@ def find_mesh_pairs(islands):
     centroids = []
     for i, isle in enumerate(islands):
         centroids.append((i, calc_centroid_island(isle)))
-    
+
     # Search for pairs beginning with the largest islands. The pairs are
     # based on centroid distance.
     pairs, found = [], []
 
     for i, c in centroids:
         if (i, c) not in found:
-            # found.append((i, c))
-            not_yet_found = [cen for cen in centroids if not cen in found and cen != (i, c)]
+            not_yet_found = [cen for cen in centroids
+                             if cen not in found and cen != (i, c)]
             j, cen, dist = find_closest_island(c, not_yet_found, islands, i)
             if dist > 0.25:
                 continue
@@ -668,7 +679,7 @@ def remove_loose_parts(bm):
     for f in bm.faces:
         if all([e.is_boundary for e in f.edges]):
             bm.faces.remove(f)
-    
+
     # Remove vertices that have no face connected to it.
     loose_verts = [v for v in bm.verts if not v.link_faces]
     for v in loose_verts:
@@ -687,7 +698,7 @@ def walk_island(vert):
     vert.tag = True
     yield(vert)
     linked_verts = [e.other_vert(vert) for e in vert.link_edges
-            if not e.other_vert(vert).tag and e.is_boundary]
+                    if not e.other_vert(vert).tag and e.is_boundary]
 
     for v in linked_verts:
         if v.tag:
@@ -704,25 +715,25 @@ def get_islands(bm, verts=[]):
             v.tag = switch
     tag(bm.verts, True)
     tag(verts, False)
-    ret = {"islands" : []}
+    ret = {"islands": []}
     verts = set(verts)
     while verts:
         v = verts.pop()
         verts.add(v)
         island = set(walk_island(v))
         ret["islands"].append(list(island))
-        tag(island, False) # remove tag = True
+        tag(island, False)  # remove tag = True
         verts -= island
     return ret
 
 
 def make_next_verts(path1, path2, edges, good_verts):
     """Get the next vertices for path1 and path2."""
-     # Get the vertices to which the last path vertex is connected to.
+    # Get the vertices to which the last path vertex is connected to.
     verts1 = [e.other_vert(path1[-1]) for e in edges
-                if path1[-1] in e.verts]
+              if path1[-1] in e.verts]
     verts2 = [e.other_vert(path2[-1]) for e in edges
-                if path2[-1] in e.verts]
+              if path2[-1] in e.verts]
 
     # Get the vertex that is in good_verts and not in the path and is
     # connected to the last path vertex.
@@ -739,7 +750,7 @@ def different_paths(path1, path2, next_vert):
     route2 = path2[1:end_index]
     if list(set(route1) & set(route2)):
         return False
-    
+
     return True
 
 
@@ -753,13 +764,13 @@ def correct_next_verts(next_vert1, next_vert2, wrong_verts, path1, path2):
         return False
     elif next_vert1[0] in wrong_verts or next_vert2[0] in wrong_verts:
         return False
-    
+
     return True
 
 
 def check_for_overlap(path1, path2):
     """Check if the 2 paths overlap."""
-    # The paths overlap if their last vertices are the same or if the last 
+    # The paths overlap if their last vertices are the same or if the last
     # vertex of a path is the same as the second-last of the other path.
     overlap = False
     if path1[-1] == path2[-1]:
@@ -769,7 +780,7 @@ def check_for_overlap(path1, path2):
         overlap = True
         path1.pop()
         path2.pop()
-    
+
     return overlap
 
 
@@ -795,7 +806,8 @@ def small_loop_between(start, e1, e2, edges, wrong_verts, good_verts, count):
                                                  good_verts)
 
         # If there is no next vertex or it is a wrong vertex, stop the search.
-        if not correct_next_verts(next_vert1, next_vert2, wrong_verts, path1, path2):
+        if not correct_next_verts(next_vert1, next_vert2, wrong_verts,
+                                  path1, path2):
             break
 
         # Append the next vertices to their paths.
@@ -823,7 +835,7 @@ def find_double_loop(start, edges, still_wrong_verts):
     for e in start_edges:
         found_path = False
         p = [start, e.other_vert(start)]
-        
+
         while not found_path:
             next_vert = [e.other_vert(p[-1]) for e in edges
                          if p[-1] in e.verts and not p[-2] in e.verts]
@@ -831,7 +843,7 @@ def find_double_loop(start, edges, still_wrong_verts):
             if p[-1] in still_wrong_verts:
                 found_path = True
                 paths.append(p)
-    
+
     # Get the target vertex and the 2 shortest paths toward it.
     path_ends = [p[-1] for p in paths]
     other_v = list(set([v for v in path_ends if path_ends.count(v) > 1]))[0]
@@ -841,7 +853,8 @@ def find_double_loop(start, edges, still_wrong_verts):
     shortest_paths = paths_to_other_v[:2]
 
     # Get loop vertices and loop edges and return them.
-    loop_verts = [v for p in shortest_paths for v in p if v not in still_wrong_verts]
+    loop_verts = [v for p in shortest_paths for v in p
+                  if v not in still_wrong_verts]
     loop_edges = [e for e in start_edges if e.other_vert(start) in loop_verts]
     loop_edges += [e for e in end_edges if e.other_vert(other_v) in loop_verts]
     return loop_verts, loop_edges, other_v    
@@ -894,7 +907,7 @@ def remove_loops(mesh, b_edges, edges_to_be_removed, verts_to_be_removed,
     still_wrong_verts = [v for v in wrong_verts if v not in verts_found]
     still_wrong_found = []
     for v in still_wrong_verts:
-        if not v in still_wrong_found:
+        if v not in still_wrong_found:
             still_wrong_found.append(v)
             loop_verts, loop_edges, other_v = find_double_loop(
                 v, b_edges, still_wrong_verts)
@@ -1218,8 +1231,10 @@ def remove_single_islands(bm, singles, paired):
 
             for v in new_verts:
                 if v.is_valid:
-                    verts.extend([e.other_vert(v) for e in v.link_edges
-                                  if e.other_vert(v) != None and e.other_vert(v) not in verts])
+                    verts.extend(
+                        [e.other_vert(v) for e in v.link_edges if
+                         e.other_vert(v) is not None and
+                         e.other_vert(v) not in verts])
 
             new_length = len(verts)
             new_verts_added = new_length > old_length
@@ -1327,15 +1342,15 @@ def make_mesh_manifold(bm):
         # bmesh.ops.bridge_loops(bm, edges=upper_edges + lower_edges, twist_offset=1)
         upper_mesh, lower_mesh, b_edges = remove_loops_and_stitch(
             upper_mesh, lower_mesh, b_edges, bm, new_edges, new_faces, i)
-        
+
     # bmesh.ops.edgenet_fill(bm, edges=new_edges)
     # Add new edges and faces to the mesh.
     for edge in new_edges:
-        if bm.edges.get(edge) == None:
+        if bm.edges.get(edge) is None:
             bm.edges.new(edge)
 
     for face in new_faces:
-        if bm.faces.get(face) == None:
+        if bm.faces.get(face) is None:
             bm.faces.new(face)
 
     # remove_single_islands(bm, single_islands, paired_islands)
@@ -1507,7 +1522,7 @@ def object_oriented_algorithm(
         print_layer_volume(False, cur_volume)
         tot_volume += cur_volume
         cur_volume = 0
-    
+
     return tot_volume * 1000000
 
 
@@ -1549,7 +1564,7 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-    method = "object"  # or "space"
+    method = "space"  # or "space"
 
     if method == "space":
         # Set number of primitives to divide the bounding box.
@@ -1559,11 +1574,15 @@ def main():
         length, width, height = 5, 5, 5
         print_primitive_size(length, width, height)
 
+        export_ply_file = True
+        ply_file_name = "pointcloud_meshes.ply"
+
         # Run the space-oriented algorithm with the assigned primitive.
         primitive = "voxel"  # or "tetra"
         volume = space_oriented_algorithm(
             ordered_meshes(selected_meshes), length, width, height, threshold,
-            minx, maxx, miny, maxy, minz, maxz, primitive=primitive)
+            minx, maxx, miny, maxy, minz, maxz, primitive=primitive,
+            export=export_ply_file, ply_name=ply_file_name)
     elif method == "object":
         # Run the object-oriented algorithm.
         volume = object_oriented_algorithm(
