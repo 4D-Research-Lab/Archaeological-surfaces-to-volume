@@ -24,16 +24,16 @@ D = bpy.data
 
 # Colors used to color the different layers. Feel free to add new RGBA colors
 # to the RGBAS array or change them if you dont like certain colors.
-RED = (1, 0, 0, 1)
-GREEN = (0, 1, 0, 1)
-BLUE = (0, 0, 1, 1)
-YELLOW = (1, 1, 0, 1)
-ORANGE = (1, 0.5, 0, 1)
-PURPLE = (0.5, 0, 1, 1)
-PINK = (1, 0.4, 1, 1)
-GREY = (0.5, 0.5, 0.5, 1)
-BLACK = (0, 0, 0, 1)
-WHITE = (1, 1, 1, 1)
+RED = (1.0, 0.0, 0.0, 1.0)
+GREEN = (0.0, 1.0, 0.0, 1.0)
+BLUE = (0.0, 0.0, 1.0, 1.0)
+YELLOW = (1.0, 1.0, 0.0, 1.0)
+ORANGE = (1.0, 0.5, 0.0, 1.0)
+PURPLE = (0.5, 0.0, 1.0, 1.0)
+PINK = (1.0, 0.4, 1.0, 1.0)
+GREY = (0.5, 0.5, 0.5, 1.0)
+BLACK = (0.0, 0.0, 0.0, 1.0)
+WHITE = (1.0, 1.0, 1.0, 1.0)
 RGBAS = [RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, PINK, BLACK, WHITE, GREY]
 
 
@@ -134,13 +134,13 @@ def update_minmax(minx, maxx, miny, maxy, minz, maxz, difx, dify, difz):
     return minx, maxx, miny, maxy, minz, maxz
 
 
-def print_bbox(minx, maxx, miny, maxy, minz, maxz):
-    """Print the minimum and maximum values of the data to gain a better
-    understanding of the data."""
-    print("Min x, max x: {min_x}, {max_x}\nMin y, max y: {min_y}, {max_y}"
-          "\nMin z, max z: {min_z}, {max_z}".format(
-              min_x=minx, max_x=maxx, min_y=miny, max_y=maxy, min_z=minz,
-              max_z=maxz))
+# def print_bbox(minx, maxx, miny, maxy, minz, maxz):
+#     """Print the minimum and maximum values of the data to gain a better
+#     understanding of the data."""
+#     print("Min x, max x: {min_x}, {max_x}\nMin y, max y: {min_y}, {max_y}"
+#           "\nMin z, max z: {min_z}, {max_z}".format(
+#               min_x=minx, max_x=maxx, min_y=miny, max_y=maxy, min_z=minz,
+#               max_z=maxz))
 
 
 def print_total_volume(volume):
@@ -149,10 +149,10 @@ def print_total_volume(volume):
           (volume, volume / 1000000))
 
 
-def print_num_primitives(num_x, num_y, num_z):
-    """Print the number of primitives in all directions."""
-    print("Number of primitives in x-direction: %d, y-direction: %d and "
-          "z-direction: %d" % (num_x, num_y, num_z))
+# def print_num_primitives(num_x, num_y, num_z):
+#     """Print the number of primitives in all directions."""
+#     print("Number of primitives in x-direction: %d, y-direction: %d and "
+#           "z-direction: %d" % (num_x, num_y, num_z))
 
 
 def print_primitive_size(length, width, height):
@@ -184,8 +184,9 @@ def ordered_meshes(selected_meshes):
 def export_ply_file(points, file_name):
     """Export the center points of the mesh as a pointcloud in a ply file. The
     file is saved in the Downloads folder with the name file_name."""
-    np_points = np.asarray(points, dtype=[("x", "f4"), ("y", "f4"),
-                                          ("z", "f4"), ("layer", "i4")])
+    np_points = np.asarray(points, dtype=[
+        ("x", "f4"), ("y", "f4"), ("z", "f4"), ("red", "u1"), ("green", "u1"),
+        ("blue", "u1"), ("layer", "i4")])
     vertex = PlyElement.describe(np_points, "vertex")
     PlyData([vertex], text=True).write("Downloads/" + file_name)
 
@@ -304,81 +305,81 @@ def draw_tetrahedra(vertices, rgba):
     new_object.select_set(False)
 
 
-def cast_down_ray(mesh, var, cur, h, dr="x"):
-    """Cast a ray from (x,y,h) or (y,x,h) in direction (0, 0, -1),
-    straight downwards."""
-    if dr == "x":
-        result = D.objects[mesh].ray_cast((cur, var, h), (0, 0, -1))
-    elif dr == "y":
-        result = D.objects[mesh].ray_cast((var, cur, h), (0, 0, -1))
+# def cast_down_ray(mesh, var, cur, h, dr="x"):
+#     """Cast a ray from (x,y,h) or (y,x,h) in direction (0, 0, -1),
+#     straight downwards."""
+#     if dr == "x":
+#         result = D.objects[mesh].ray_cast((cur, var, h), (0, 0, -1))
+#     elif dr == "y":
+#         result = D.objects[mesh].ray_cast((var, cur, h), (0, 0, -1))
 
-    return result
-
-
-def find_direction_minmax(msh1, msh2, threshold, minc, maxc, maxz,
-                          stepsize, cast_hgt, cur_min, cur_max, dr="x"):
-    """Find the minimum and maximum coordinate in a specific direction for
-    which the threshold is exceeded."""
-    # Initialize minimum and maximum found to false.
-    min_found, max_found = False, False
-
-    while not (min_found and max_found):
-        # For variable c value, check if current value and this c is a position
-        # that exceeds threshold.
-        for c in np.linspace(minc, maxc, 50):
-            if not min_found:
-                # Cast rays to both meshes from cast height downward.
-                min1_ray = cast_down_ray(msh1, cur_min, c, cast_hgt, dr=dr)
-                min2_ray = cast_down_ray(msh2, cur_min, c, cast_hgt, dr=dr)
-
-                # Check if both rays hit the meshes and check distance between
-                # the hit locations.
-                if (min1_ray[0] and min2_ray[0] and
-                        dist_btwn_pts(min1_ray[1], min2_ray[1]) >= threshold):
-                    min_found = True
-                    min_c = cur_min
-
-            if not max_found:
-                # Cast rays to both meshes from cast height downward.
-                max1_ray = cast_down_ray(msh1, cur_max, c, cast_hgt, dr=dr)
-                max2_ray = cast_down_ray(msh2, cur_max, c, cast_hgt, dr=dr)
-
-                # Check if both rays hit the meshes and check distance between
-                # the hit locations.
-                if (max1_ray[0] and max2_ray[0] and
-                        dist_btwn_pts(max1_ray[1], max2_ray[1]) >= threshold):
-                    max_found = True
-                    max_c = cur_max
-
-        # Increase minimum and decrease maximum with every step.
-        cur_min += stepsize
-        cur_max -= stepsize
-
-    return min_c, max_c
+#     return result
 
 
-def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
-    """Reduce the bounding box for 2 meshes so that only (x,y)-positions with
-    relatively large vertical distance are in it. Mesh1 lays above mesh2."""
-    # Set the stepsize, cast height and current minimum and maximum values.
-    stepsize = 0.01
-    cast_hgt = maxz + 1
-    cur_minx, cur_maxx = minx, maxx
-    cur_miny, cur_maxy = miny, maxy
+# def find_direction_minmax(msh1, msh2, threshold, minc, maxc, maxz,
+#                           stepsize, cast_hgt, cur_min, cur_max, dr="x"):
+#     """Find the minimum and maximum coordinate in a specific direction for
+#     which the threshold is exceeded."""
+#     # Initialize minimum and maximum found to false.
+#     min_found, max_found = False, False
 
-    # Find new minimum and maximum x-values based on the threshold.
-    minx, maxx = find_direction_minmax(
-        mesh1, mesh2, threshold, miny, maxy, maxz, stepsize, cast_hgt,
-        cur_minx, cur_maxx, dr="x")
+#     while not (min_found and max_found):
+#         # For variable c value, check if current value and this c is a position
+#         # that exceeds threshold.
+#         for c in np.linspace(minc, maxc, 50):
+#             if not min_found:
+#                 # Cast rays to both meshes from cast height downward.
+#                 min1_ray = cast_down_ray(msh1, cur_min, c, cast_hgt, dr=dr)
+#                 min2_ray = cast_down_ray(msh2, cur_min, c, cast_hgt, dr=dr)
 
-    # Find new minimum and maximum y-values based on the threshold.
-    miny, maxy = find_direction_minmax(
-        mesh1, mesh2, threshold, minx, maxx, maxz, stepsize, cast_hgt,
-        cur_miny, cur_maxy, dr="y")
+#                 # Check if both rays hit the meshes and check distance between
+#                 # the hit locations.
+#                 if (min1_ray[0] and min2_ray[0] and
+#                         dist_btwn_pts(min1_ray[1], min2_ray[1]) >= threshold):
+#                     min_found = True
+#                     min_c = cur_min
 
-    print("New bounding box: minx %.2f, maxx %.2f, miny %.2f, maxy %.2f" %
-          (minx, maxx, miny, maxy))
-    return minx, maxx, miny, maxy
+#             if not max_found:
+#                 # Cast rays to both meshes from cast height downward.
+#                 max1_ray = cast_down_ray(msh1, cur_max, c, cast_hgt, dr=dr)
+#                 max2_ray = cast_down_ray(msh2, cur_max, c, cast_hgt, dr=dr)
+
+#                 # Check if both rays hit the meshes and check distance between
+#                 # the hit locations.
+#                 if (max1_ray[0] and max2_ray[0] and
+#                         dist_btwn_pts(max1_ray[1], max2_ray[1]) >= threshold):
+#                     max_found = True
+#                     max_c = cur_max
+
+#         # Increase minimum and decrease maximum with every step.
+#         cur_min += stepsize
+#         cur_max -= stepsize
+
+#     return min_c, max_c
+
+
+# def reduce_boundingbox(mesh1, mesh2, threshold, minx, maxx, miny, maxy, maxz):
+#     """Reduce the bounding box for 2 meshes so that only (x,y)-positions with
+#     relatively large vertical distance are in it. Mesh1 lays above mesh2."""
+#     # Set the stepsize, cast height and current minimum and maximum values.
+#     stepsize = 0.01
+#     cast_hgt = maxz + 1
+#     cur_minx, cur_maxx = minx, maxx
+#     cur_miny, cur_maxy = miny, maxy
+
+#     # Find new minimum and maximum x-values based on the threshold.
+#     minx, maxx = find_direction_minmax(
+#         mesh1, mesh2, threshold, miny, maxy, maxz, stepsize, cast_hgt,
+#         cur_minx, cur_maxx, dr="x")
+
+#     # Find new minimum and maximum y-values based on the threshold.
+#     miny, maxy = find_direction_minmax(
+#         mesh1, mesh2, threshold, minx, maxx, maxz, stepsize, cast_hgt,
+#         cur_miny, cur_maxy, dr="y")
+
+#     print("New bounding box: minx %.2f, maxx %.2f, miny %.2f, maxy %.2f" %
+#           (minx, maxx, miny, maxy))
+#     return minx, maxx, miny, maxy
 
 
 def set_vol_primitive(length, width, height, primitive):
@@ -450,12 +451,12 @@ def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
     zs = np.arange(minz, maxz + h, h)
 
     # Combine the coordinates to 3D Cartesian coordinates.
-    return [(x, y, z) for x in xs for y in ys for z in zs]
+    return ((x, y, z) for x in xs for y in ys for z in zs)
 
 
 def make_vol_prims_centers(tetra_array):
     """For each primitive corners in the array, transform it to its center."""
-    centers = [center_tetrahedron(*verts) for verts in tetra_array]
+    centers = (center_tetrahedron(*verts) for verts in tetra_array)
     return centers
 
 
@@ -543,6 +544,7 @@ def space_oriented_volume_between_meshes(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
                 volume_primitives, vol_primitive, threshold)
 
+    # TODO: volume_primitives gets way too big, maybe write it to a file.
     return cur_volume, volume_primitives
 
 
@@ -583,7 +585,9 @@ def space_oriented_algorithm(
                 vol_prims = make_vol_prims_centers(vol_prims)
 
         if export:
-            vol_prims = [(x, y, z, i) for (x, y, z) in vol_prims]
+            r, g, b = [math.ceil(255 * color)
+                       for color in RGBAS[lower_mesh % len(RGBAS)][:3]]
+            vol_prims = [(x, y, z, r, g, b, i) for (x, y, z) in vol_prims]
             points.extend(vol_prims)
 
     if export:
@@ -688,12 +692,12 @@ def remove_loose_parts(bm):
             bm.faces.remove(f)
 
     # Remove vertices that have no face connected to it.
-    loose_verts = [v for v in bm.verts if not v.link_faces]
+    loose_verts = [v for v in bm.verts if v.is_wire]
     for v in loose_verts:
         bm.verts.remove(v)
 
     # Remove edges that have no face conncectd to it.
-    loose_edges = [e for e in bm.edges if not e.link_faces]
+    loose_edges = [e for e in bm.edges if e.is_wire]
     for e in loose_edges:
         bm.edges.remove(e)
 
@@ -750,15 +754,15 @@ def make_next_verts(path1, path2, edges, good_verts):
     return next_vert1, next_vert2
 
 
-def different_paths(path1, path2, next_vert):
-    """Check if paths to next_vert are different."""
-    route1 = path1[1:]
-    end_index = path2.index(next_vert)
-    route2 = path2[1:end_index]
-    if list(set(route1) & set(route2)):
-        return False
+# def different_paths(path1, path2, next_vert):
+#     """Check if paths to next_vert are different."""
+#     route1 = path1[1:]
+#     end_index = path2.index(next_vert)
+#     route2 = path2[1:end_index]
+#     if list(set(route1) & set(route2)):
+#         return False
 
-    return True
+#     return True
 
 
 def correct_next_verts(next_vert1, next_vert2, wrong_verts, path1, path2):
@@ -1008,16 +1012,16 @@ def horizontal_edge(vector, rad):
     return False
 
 
-def almost_same_direction(vec1, vec2):
-    """Check if vector 1 and vector 2 have almost the same direction."""
-    pos_angle = vec2.angle(vec1)
-    neg_angle = vec2.angle(-vec1)
+# def almost_same_direction(vec1, vec2):
+#     """Check if vector 1 and vector 2 have almost the same direction."""
+#     pos_angle = vec2.angle(vec1)
+#     neg_angle = vec2.angle(-vec1)
 
-    # Direction should not differ more than 25 degrees or 0.45 radians.
-    if abs(pos_angle) < 0.45 or abs(neg_angle) < 0.45:
-        return True
+#     # Direction should not differ more than 25 degrees or 0.45 radians.
+#     if abs(pos_angle) < 0.45 or abs(neg_angle) < 0.45:
+#         return True
 
-    return False
+#     return False
 
 
 def jasnom_step_1_and_2(long_mesh, short_mesh):
@@ -1216,42 +1220,42 @@ def remove_loops_and_stitch(mesh1, mesh2, b_edges, bmsh, new_edges, new_faces, i
     return mesh1, mesh2, b_edges
 
 
-def overlapping_verts(verts, paired):
-    """Check if any of the vertices in verts is in a paired island."""
-    all_paired_verts = [v for island in paired for v in island]
-    return any([v in all_paired_verts for v in verts])
+# def overlapping_verts(verts, paired):
+#     """Check if any of the vertices in verts is in a paired island."""
+#     all_paired_verts = [v for island in paired for v in island]
+#     return any([v in all_paired_verts for v in verts])
 
 
-def remove_single_islands(bm, singles, paired):
-    """Remove the islands that are not paired with any other island."""
-    for i, s in enumerate(singles):
-        verts, new_verts = s, s
-        new_verts_added = True
-        count = 0
+# def remove_single_islands(bm, singles, paired):
+#     """Remove the islands that are not paired with any other island."""
+#     for i, s in enumerate(singles):
+#         verts, new_verts = s, s
+#         new_verts_added = True
+#         count = 0
 
-        while new_verts_added:
-            count += 1
-            old_length = len(verts)
+#         while new_verts_added:
+#             count += 1
+#             old_length = len(verts)
 
-            # print("Verts: ", verts)
-            # print("New verts: ", new_verts)
-            print("Index: %d, depth: %d" % (i, count))
+#             # print("Verts: ", verts)
+#             # print("New verts: ", new_verts)
+#             print("Index: %d, depth: %d" % (i, count))
 
-            for v in new_verts:
-                if v.is_valid:
-                    verts.extend(
-                        [e.other_vert(v) for e in v.link_edges if
-                         e.other_vert(v) is not None and
-                         e.other_vert(v) not in verts])
+#             for v in new_verts:
+#                 if v.is_valid:
+#                     verts.extend(
+#                         [e.other_vert(v) for e in v.link_edges if
+#                          e.other_vert(v) is not None and
+#                          e.other_vert(v) not in verts])
 
-            new_length = len(verts)
-            new_verts_added = new_length > old_length
-            new_verts = verts[-(new_length - old_length):]
+#             new_length = len(verts)
+#             new_verts_added = new_length > old_length
+#             new_verts = verts[-(new_length - old_length):]
 
-        if not overlapping_verts(verts, paired):
-            for v in verts:
-                if v.is_valid:
-                    bm.verts.remove(v)
+#         if not overlapping_verts(verts, paired):
+#             for v in verts:
+#                 if v.is_valid:
+#                     bm.verts.remove(v)
 
 
 def remove_small_islands(obj):
@@ -1280,22 +1284,22 @@ def remove_small_islands(obj):
     return C.selected_objects[0]
 
 
-def fill_in_holes(obj):
-    """Fill in the holes of the mesh to get continuous mesh."""
-    for ob in D.objects:
-        ob.select_set(False)
+# def fill_in_holes(obj):
+#     """Fill in the holes of the mesh to get continuous mesh."""
+#     for ob in D.objects:
+#         ob.select_set(False)
 
-    # Select only the specified object and fill its holes.
-    obj.select_set(True)
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.fill_holes(sides=0)
-    bpy.ops.object.mode_set(mode="OBJECT")
+#     # Select only the specified object and fill its holes.
+#     obj.select_set(True)
+#     bpy.ops.object.mode_set(mode="EDIT")
+#     bpy.ops.mesh.fill_holes(sides=0)
+#     bpy.ops.object.mode_set(mode="OBJECT")
 
-    return obj
+#     return obj
 
 
-def make_mesh_manifold(bm):
-    """Make the received mesh manifold."""
+def stitch_meshes(bm):
+    """Stitch the received meshes together using a 3D version of JANSNOM."""
     # for v in bm.verts:
     #     v.hide = True
     # for e in bm.edges:
@@ -1398,24 +1402,36 @@ def process_objects(obj1, obj2):
     if check_mesh_closed(combi):
         volume = calculate_closed_triangle_mesh_volume(combi)
     else:
-        combi = make_mesh_manifold(combi)
+        combi = stitch_meshes(combi)
 
-    # non_manifold_edges = [e for e in combi.edges if not e.is_manifold]
+    # non_manifold_edges = [e for e in combi.edges if not e.is_manifold and e.is_boundary]
     # for e in non_manifold_edges:
     #     e.hide = False
     #     e.smooth = False
     # Write data to obj1.
     # bmesh.ops.holes_fill(combi, edges=find_boundary_edges(combi), sides=0)
     combi.to_mesh(ob1.data)
-    
+    combi.free()
     ob1 = remove_small_islands(ob1)
 
+    # still_holes = bmesh.new()
+    # still_holes.from_mesh(ob1.data)
+    # boundary_edges = [e for e in still_holes.edges if e.is_boundary]
+    # for e in boundary_edges:
+    #     e.hide = False
+    #     e.smooth = False
+    # # new_faces_dict = bmesh.ops.holes_fill(still_holes, edges=boundary_edges, sides=3)
+    # # print("There are %d new faces added to fill up the holes!" % len(new_faces_dict))
+
+    # still_holes.to_mesh(ob1.data)
+    # still_holes.free()
+
     # ob1 = fill_in_holes(ob1)
+    # Make manifold deletes whole islands!
     # bpy.ops.mesh.print3d_clean_non_manifold()
 
-    combi.normal_update()
-    volume = combi.calc_volume()
-    combi.free()
+    # combi.normal_update()
+    # volume = combi.calc_volume()
 
     # Remove obj2 and update view layer.
     D.meshes.remove(ob2.data)
@@ -1541,22 +1557,22 @@ def object_oriented_algorithm(
     return tot_volume * 1000000
 
 
-# The slicer algorithm.
-def slicer_algotihm(
-        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
-        maxz, test=False):
-    """A slicer algorithm to make a 3D model out of multiple triangular
-    meshes."""
-    pass
+# # The slicer algorithm.
+# def slicer_algotihm(
+#         meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
+#         maxz, test=False):
+#     """A slicer algorithm to make a 3D model out of multiple triangular
+#     meshes."""
+#     pass
 
 
-# The liquid simulation algorithm.
-def liquid_simulation_algorithm(
-        meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
-        maxz, test=False):
-    """An algorithm that uses liquid simulation to make a 3D model out of
-    multiple triangular meshes."""
-    pass
+# # The liquid simulation algorithm.
+# def liquid_simulation_algorithm(
+#         meshes, num_x, num_y, num_z, threshold, minx, maxx, miny, maxy, minz,
+#         maxz, test=False):
+#     """An algorithm that uses liquid simulation to make a 3D model out of
+#     multiple triangular meshes."""
+#     pass
 
 
 # The main part of the code. Change variables and algorithms here.
@@ -1579,7 +1595,7 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-    method = "object"  # or "space"
+    method = "space"  # or "space"
 
     if method == "space":
         # Set number of primitives to divide the bounding box.
@@ -1590,7 +1606,7 @@ def main():
         print_primitive_size(length, width, height)
 
         export_ply_file = True
-        ply_file_name = "pointcloud_meshes.ply"
+        ply_file_name = "rgb_ply_pointcloud.ply"
 
         # Run the space-oriented algorithm with the assigned primitive.
         primitive = "voxel"  # or "tetra"
