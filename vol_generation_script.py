@@ -136,7 +136,7 @@ def update_minmax(minx, maxx, miny, maxy, minz, maxz, difx, dify, difz):
 
 def print_total_volume(volume):
     """Print the total volume."""
-    print("The total volume is %.2f cm3 or %.2f m3.\n" %
+    print("The total volume is %.2f cm3 or %.2f m3." %
           (volume, volume / 1000000))
 
 
@@ -188,16 +188,17 @@ def center_tetrahedron(v1, v2, v3, v4):
     return tuple(el / 4 for el in s)
 
 
-def make_voxel_verts(origin, length, width, height):
-    """Make a list of vertices for given origin and sizes."""
-    v0 = origin
-    v1 = (origin[0] + length, origin[1], origin[2])
-    v2 = (origin[0], origin[1] + width, origin[2])
-    v3 = (origin[0] + length, origin[1] + width, origin[2])
-    v4 = (origin[0], origin[1], origin[2] + height)
-    v5 = (origin[0] + length, origin[1], origin[2] + height)
-    v6 = (origin[0], origin[1] + width, origin[2] + height)
-    v7 = (origin[0] + length, origin[1] + width, origin[2] + height)
+def make_voxel_verts(center, length, width, height):
+    """Make a list of vertices for given center and sizes."""
+    l, w, h = length / 2, width / 2, height / 2
+    v0 = (center[0] - l, center[1] - w, center[2] - h)
+    v1 = (center[0] + l, center[1] - w, center[2] - h)
+    v2 = (center[0] - l, center[1] + w, center[2] - h)
+    v3 = (center[0] + l, center[1] + w, center[2] - h)
+    v4 = (center[0] - l, center[1] - w, center[2] + h)
+    v5 = (center[0] + l, center[1] - w, center[2] + h)
+    v6 = (center[0] - l, center[1] + w, center[2] + h)
+    v7 = (center[0] + l, center[1] + w, center[2] + h)
     return [v0, v1, v2, v3, v4, v5, v6, v7]
 
 
@@ -212,16 +213,16 @@ def make_voxel_faces(i):
     return [f1, f2, f3, f4, f5, f6]
 
 
-def draw_cubes(origins, length, width, height, rgba):
-    """Draw cubes from given origins, size and color"""
+def draw_cubes(centers, length, width, height, rgba):
+    """Draw cubes from given centers, size and color"""
     # Specify the color and faces for the new meshes.
     color = D.materials.new("Layer_color")
     index = 0
     verts, faces = [], []
 
-    for o in origins:
+    for cen in centers:
         # Make the vertices of the new mesh.
-        vs = make_voxel_verts(o, length, width, height)
+        vs = make_voxel_verts(cen, length, width, height)
         verts.extend(vs)
         faces.extend(make_voxel_faces(index))
         index += 8
@@ -247,6 +248,59 @@ def draw_cubes(origins, length, width, height, rgba):
     new_object.select_set(False)
 
 
+def get_other_tetra_verts(ratio_l, ratio_w, ratio_h, l, w, h, v0):
+    """Get the 2 vertices of the tetrahedra which are not on the body
+    diagonal."""
+    vs = []
+
+    # If center is 3/4 length or 1/4 length further than v0, we know 1 other
+    # vertex for sure because of the way we divided the box.
+    if ratio_l == 3:
+        vs.append((v0[0] + l, v0[1], v0[2]))
+    elif ratio_l == 1:
+        vs.append((v0[0], v0[1] + w, v0[2] + h))
+
+    # If center is 3/4 width or 1/4 width than v0, we know 1 other
+    # vertex for sure because of the way we divided the box.
+    if ratio_w == 3:
+        vs.append((v0[0], v0[1] + w, v0[2]))
+    elif ratio_w == 1:
+        vs.append((v0[0] + l, v0[1], v0[2] + h))
+
+    # If center is 3/4 height or 1/4 height further than v0, we know 1 other
+    # vertex for sure because of the way we divided the box.
+    if ratio_h == 3:
+        vs.append((v0[0], v0[1], v0[2] + h))
+    elif ratio_h == 1:
+        vs.append((v0[0] + l, v0[1] + w, v0[2]))
+
+    return vs[0], vs[1]
+
+
+def make_tetra_verts(center, length, width, height, minx, miny, minz):
+    """Make a list of vertices for given center and sizes."""
+    # Get vertices closest to the (0, 0, 0) point or bottom diagonal corner.
+    min_length = math.floor((center[0] - minx) / length) * length
+    min_width = math.floor((center[1] - miny) / width) * width
+    min_height = math.floor((center[2] - minz) / height) * height
+
+    # Make the first 2 vertices which span the body diagonal of the box in
+    # which the tetrahedron lies.
+    v0 = (minx + min_length, miny + min_width, minz + min_height)
+    v1 = (v0[0] + length, v0[1] + width, v0[2] + height)
+
+    # Get the ratio between the center and v0.
+    ratio_len = round(4 * (center[0] - v0[0]) / length)
+    ratio_wid = round(4 * (center[1] - v0[1]) / width)
+    ratio_hgt = round(4 * (center[2] - v0[2]) / height)
+
+    # Get the other 2 vertices based on the difference between its center and
+    # the bottom body diagonal vertex.
+    v2, v3 = get_other_tetra_verts(
+        ratio_len, ratio_wid, ratio_hgt, length, width, height, v0)
+    return [v0, v1, v2, v3]
+
+
 def make_tetra_faces(i):
     """Return a list of 4 faces based on the vertex index."""
     f1 = (i, i + 1, i + 2)
@@ -256,7 +310,7 @@ def make_tetra_faces(i):
     return [f1, f2, f3, f4]
 
 
-def draw_tetrahedra(vertices, rgba):
+def draw_tetrahedra(centers, length, height, width, minx, miny, minz, rgba):
     """Draw tetrahedra from given vertices and color."""
     # Specify the color and faces for the new meshes.
     color = D.materials.new("Layer_color")
@@ -264,7 +318,9 @@ def draw_tetrahedra(vertices, rgba):
     verts, faces = [], []
     index = 0
 
-    for vs in vertices:
+    for cen in centers:
+        # Make the vertices of the new mesh.
+        vs = make_tetra_verts(cen, length, height, width, minx, miny, minz)
         verts.extend(vs)
         faces.extend(make_tetra_faces(index))
         index += 4
@@ -386,7 +442,7 @@ def process_voxel(
     # If the voxel is part of the volume, add it to the primitive list and set
     # the volume.
     if in_volume:
-        volume_primitives.append((x, y, z))
+        volume_primitives.append(center)
         volume = vol_primitive
 
     return volume
@@ -415,7 +471,7 @@ def process_tetra(
         # If the tetrahedron is part of the volume, add it to the primitive
         # list and add its volume to the volume variable.
         if in_volume:
-            volume_primitives.append((v1, v2, v3, v4))
+            volume_primitives.append(center)
             volume += vol_primitive
 
     return volume
@@ -488,12 +544,10 @@ def space_oriented_algorithm(
                 draw_cubes(vol_prims, length, width, height,
                            RGBAS[lower_mesh % len(RGBAS)])
             elif primitive == "tetra":
-                draw_tetrahedra(vol_prims, RGBAS[lower_mesh % len(RGBAS)])
+                draw_tetrahedra(vol_prims, length, width, height, minx, miny,
+                                minz, RGBAS[lower_mesh % len(RGBAS)])
 
         if export:
-            if primitive == "tetra":
-                vol_prims = make_vol_prims_centers(vol_prims)
-
             r, g, b = [math.ceil(255 * color)
                        for color in RGBAS[lower_mesh % len(RGBAS)][:3]]
             vol_prims = [(x, y, z, r, g, b, i) for (x, y, z) in vol_prims]
@@ -1468,7 +1522,7 @@ def main():
         # num_x, num_y, num_z = 150, 150, 50
 
         # Size in centimeters for the primitives.
-        length, width, height = 5, 5, 1
+        length, width, height = 5, 5, 5
         print_primitive_size(length, width, height)
 
         # Option to turn off drawing, it gives a minor performance boost.
@@ -1476,11 +1530,11 @@ def main():
 
         # Decide if you want a pointcloud exported so you are able to see
         # a solid object.
-        export_ply_file = True
+        export_ply_file = False
         ply_file_name = "test_without_draw.ply"
 
         # Run the space-oriented algorithm with the assigned primitive.
-        primitive = "voxel"  # or "tetra"
+        primitive = "tetra"  # or "tetra"
         volume = space_oriented_algorithm(
             ordered_meshes(selected_meshes), length, width, height, threshold,
             minx, maxx, miny, maxy, minz, maxz, primitive=primitive,
@@ -1493,7 +1547,7 @@ def main():
 
     print_total_volume(volume)
 
-    print("Script Finished: %.4f sec." % (time.time() - time_start))
+    print("Script Finished: %.4f sec.\n" % (time.time() - time_start))
 
 
 if __name__ == "__main__":
