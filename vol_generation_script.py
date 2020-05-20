@@ -452,7 +452,6 @@ def space_oriented_volume_between_meshes(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
                 volume_primitives, vol_primitive, threshold)
 
-    # TODO: volume_primitives gets way too big, maybe write it to a file.
     return cur_volume, volume_primitives
 
 
@@ -490,9 +489,11 @@ def space_oriented_algorithm(
                            RGBAS[lower_mesh % len(RGBAS)])
             elif primitive == "tetra":
                 draw_tetrahedra(vol_prims, RGBAS[lower_mesh % len(RGBAS)])
-                vol_prims = make_vol_prims_centers(vol_prims)
 
         if export:
+            if primitive == "tetra":
+                vol_prims = make_vol_prims_centers(vol_prims)
+
             r, g, b = [math.ceil(255 * color)
                        for color in RGBAS[lower_mesh % len(RGBAS)][:3]]
             vol_prims = [(x, y, z, r, g, b, i) for (x, y, z) in vol_prims]
@@ -550,7 +551,7 @@ def find_closest_island(centroid, cen_list, islands, index):
     return min_index, min_cen, min_dist
 
 
-def find_mesh_pairs(islands):
+def find_mesh_pairs(islands, upper_verts):
     """Find pairs of vertex rings that need to be stiched together."""
     # If there are an uneven number of islands, pop the last and thus
     # smallest island.
@@ -560,16 +561,21 @@ def find_mesh_pairs(islands):
     # Make a list with tuples of indices and centroids of the islands.
     centroids = []
     for i, isle in enumerate(islands):
-        centroids.append((i, calc_centroid_island(isle)))
+        if isle[0] in upper_verts:
+            upper = True
+        else:
+            upper = False
+
+        centroids.append((i, calc_centroid_island(isle), upper))
 
     # Search for pairs beginning with the largest islands. The pairs are
     # based on centroid distance.
     pairs, found = [], []
 
-    for i, c in centroids:
+    for i, c, u in centroids:
         if (i, c) not in found:
-            not_yet_found = [cen for cen in centroids
-                             if cen not in found and cen != (i, c)]
+            not_yet_found = [cen[:2] for cen in centroids if cen[-1] != u and
+                             cen not in found]
             j, cen, dist = find_closest_island(c, not_yet_found, islands, i)
             if dist > 0.25:
                 continue
@@ -579,16 +585,6 @@ def find_mesh_pairs(islands):
                 pairs.append([islands[i], islands[j]])
 
     return pairs
-
-
-def calculate_closed_triangle_mesh_volume(bm):
-    """Calculate the volume of a closed triangle mesh in cubic centimeters."""
-    return bm.calc_volume() * 1000000
-
-
-def check_mesh_closed(bm):
-    """Check if the specified mesh is a closed mesh or manifold."""
-    return all([v.is_manifold for v in bm.verts])
 
 
 def remove_loose_parts(bm):
@@ -925,7 +921,7 @@ def find_min_edge_to_short_mesh(short_mesh, v):
 
             cur_dist = dist_btwn_pts(v.co, other_v.co)
 
-            # If the edge is too horizontal dont use it.
+            # If the edge is too horizontal dont use it directly.
             if horizontal_edge(cur_vec, rad):
                 hor_edge_found = True
 
@@ -1153,7 +1149,7 @@ def remove_small_islands(obj):
     return C.selected_objects[0]
 
 
-def stitch_meshes(bm):
+def stitch_meshes(bm, upper_verts):
     """Stitch the received meshes together using a 3D version of JANSNOM."""
     # Remove loose edges and vertices.
     remove_loose_parts(bm)
@@ -1168,7 +1164,7 @@ def stitch_meshes(bm):
     islands.sort(key=len, reverse=True)
 
     # Create pairs of island vertices that are close together.
-    island_pairs = find_mesh_pairs(islands)
+    island_pairs = find_mesh_pairs(islands, upper_verts)
 
     # Stitch the pairs together using the JASNOM algorithm.
     new_edges, new_faces = [], []
@@ -1191,9 +1187,10 @@ def stitch_meshes(bm):
 def fill_up_islands(bm, vert_islands):
     """Fill up all the holes that are still in the mesh."""
     for isle in vert_islands:
-        if len(isle) >= 2:
+        if len(isle) > 2:
             face_edge_dict = bmesh.ops.contextual_create(
                 bm, geom=isle, use_smooth=False)
+
             bmesh.ops.triangulate(bm, faces=face_edge_dict["faces"])
 
 
@@ -1205,6 +1202,68 @@ def volume_tetra_with_origin(v1, v2, v3):
     x3, y3, z3 = v3
     return (-x3 * y2 * z1 + x2 * y3 * z1 + x3 * y1 * z2 - x1 * y3 * z2 -
             x2 * y1 * z3 + x1 * y2 * z3) / 6
+
+
+def make_good_center(o):
+    """Determine the center of the object and if it does not lies inside the
+    object, shift it so that it is."""
+    # Determine the center by taking the average of all vertices.
+    center = tuple(np.average([v.co for v in o.data.vertices], axis=0))
+
+    # Check if the center is actually inside the object and if not shift it
+    # in the appropriate direction.
+    if not check_inside_mesh(D.objects.values().index(o), center, 100):
+        down_point = o.ray_cast(center, (0, 0, -1), distance=100)
+        up_point = o.ray_cast(center, (0, 0, 1), distance=100)
+        shift = mathutils.Vector((0, 0, 0.001))
+
+        if down_point[0]:
+            sec_down_point = o.ray_cast(down_point[1] - shift,
+                                        (0, 0, -1), distance=100)
+            center = (down_point[1] + sec_down_point[1]) / 2
+        elif up_point[0]:
+            sec_up_point = o.ray_cast(up_point[1] + shift,
+                                      (0, 0, 1), distance=100)
+            center = (up_point[1] + sec_up_point[1]) / 2
+
+    return center
+
+
+def process_loose_object(o):
+    """Process the losse object o by filling remaing holes and calculate its
+    volume."""
+    # Determine the center.
+    center = make_good_center(o)
+
+    # Make a new bmesh object.
+    temp_mesh = bmesh.new()
+    temp_mesh.from_mesh(o.data)
+
+    # Remove any loose faces, edges and vertices.
+    remove_loose_parts(temp_mesh)
+
+    # Fill up the remaining islands/holes.
+    m_verts = [v for v in temp_mesh.verts if v.is_boundary]
+    islands = [island for island in get_islands(
+        temp_mesh, verts=m_verts)["islands"]]
+    fill_up_islands(temp_mesh, islands)
+
+    # Update the normals of the faces.
+    temp_mesh.normal_update()
+    good_faces = [f for f in temp_mesh.faces
+                  if all([e.is_manifold for e in f.edges])]
+    bmesh.ops.recalc_face_normals(temp_mesh, faces=good_faces)
+
+    # Calculate the volume of the object.
+    cur_vol = abs(sum([volume_tetra_with_origin(
+        *[tuple(np.subtract(v.co, center)) for v in f.verts])
+            for f in good_faces]))
+
+    # Write bmesh back to mesh object and free it.
+    temp_mesh.to_mesh(o.data)
+    temp_mesh.free()
+
+    return cur_vol
 
 
 def fill_holes_and_calc_volume(obj):
@@ -1224,41 +1283,7 @@ def fill_holes_and_calc_volume(obj):
         if len(o.data.vertices) < 1000:
             D.meshes.remove(o.data)
         else:
-            center = tuple(np.average([v.co for v in o.data.vertices], axis=0))
-            if not check_inside_mesh(D.objects.values().index(o), center, 100):
-                down_point = o.ray_cast(center, (0, 0, -1), distance=100)
-                if down_point[0]:
-                    shift = mathutils.Vector((0, 0, -0.02))
-                    center = down_point[1] - shift
-
-            temp_mesh = bmesh.new()
-            temp_mesh.from_mesh(o.data)
-
-            remove_loose_parts(temp_mesh)
-
-            m_verts = [v for v in temp_mesh.verts if v.is_boundary]
-            islands = [island for island in get_islands(
-                temp_mesh, verts=m_verts)["islands"]]
-            fill_up_islands(temp_mesh, islands)
-
-            # TODO: maybe remove non-manifold edges / faces.
-
-            temp_mesh.normal_update()
-            good_faces = [f for f in temp_mesh.faces if all([e.is_manifold for e in f.edges])]
-            bmesh.ops.recalc_face_normals(temp_mesh, faces=good_faces)
-
-            # center = tuple(np.average([v.co for v in temp_mesh.verts], axis=0))
-            # temp_mesh.verts.ensure_lookup_table()
-            # center = temp_mesh.verts[math.ceil(len(temp_mesh.verts) / 5)].co
-            # print(center)
-            # c_vert = temp_mesh.verts.new(center)
-            # c_vert.select = True
-            volume += abs(sum([volume_tetra_with_origin(
-                *[tuple(np.subtract(v.co, center)) for v in f.verts])
-                  for f in good_faces]))
-
-            temp_mesh.to_mesh(o.data)
-            temp_mesh.free()
+            volume += process_loose_object(o)
 
     # Join the remaining big objects together.
     C.view_layer.objects.active = C.selected_objects[0]
@@ -1281,17 +1306,14 @@ def process_objects(obj1, obj2):
     # Make a new bmesh that combines data from obj1 and obj2.
     combi = bmesh.new()
     combi.from_mesh(ob1.data)
+    upper_boundaries = [v for v in combi.verts if v.is_boundary]
     combi.from_mesh(ob2.data)
 
-    if check_mesh_closed(combi):
-        volume = calculate_closed_triangle_mesh_volume(combi)
-    else:
-        combi = stitch_meshes(combi)
+    combi = stitch_meshes(combi, upper_boundaries)
 
     # Write data to obj1.
     combi.to_mesh(ob1.data)
     combi.free()
-    # ob1 = remove_small_islands(ob1)
     volume = fill_holes_and_calc_volume(ob1)
 
     # Remove obj2 and update view layer.
@@ -1363,7 +1385,8 @@ def cut_mesh(minx, maxx, miny, maxy, upper_mesh, lower_mesh, threshold,
     upper_mesh, lower_mesh = update_indices(upper_mesh, lower_mesh,
                                             prefix_name)
 
-    # Link upper mesh to scene, make it active and set it to edit mode.
+    # Link a copy of upper mesh to the scene, make it active and set it to
+    # edit mode.
     obj = create_object_set_active(upper_mesh, prefix_name)
 
     # Make a bmesh object from the actice mesh.
@@ -1399,7 +1422,7 @@ def object_oriented_algorithm(
         meshes, threshold, minx, maxx, miny, maxy, minz, maxz, test=False):
     """Object-oriented algorithm to make a 3D model out of multiple triangular
     meshes."""
-    tot_volume, cur_volume = 0, 0
+    tot_volume = 0
     max_distance = maxz - minz
     threshold /= 100
 
@@ -1414,7 +1437,6 @@ def object_oriented_algorithm(
         cur_volume = process_objects(upper, lower)
         print_layer_volume(False, cur_volume, i)
         tot_volume += cur_volume
-        cur_volume = 0
 
     return tot_volume
 
@@ -1439,25 +1461,30 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-    method = "object"  # or "space"
+    method = "space"  # or "space"
 
     if method == "space":
         # Set number of primitives to divide the bounding box.
         # num_x, num_y, num_z = 150, 150, 50
 
         # Size in centimeters for the primitives.
-        length, width, height = 5, 5, 5
+        length, width, height = 5, 5, 1
         print_primitive_size(length, width, height)
 
+        # Option to turn off drawing, it gives a minor performance boost.
+        draw = True
+
+        # Decide if you want a pointcloud exported so you are able to see
+        # a solid object.
         export_ply_file = True
-        ply_file_name = "rgb_ply_pointcloud.ply"
+        ply_file_name = "test_without_draw.ply"
 
         # Run the space-oriented algorithm with the assigned primitive.
         primitive = "voxel"  # or "tetra"
         volume = space_oriented_algorithm(
             ordered_meshes(selected_meshes), length, width, height, threshold,
             minx, maxx, miny, maxy, minz, maxz, primitive=primitive,
-            export=export_ply_file, ply_name=ply_file_name)
+            export=export_ply_file, ply_name=ply_file_name, draw=draw)
     elif method == "object":
         # Run the object-oriented algorithm.
         volume = object_oriented_algorithm(
