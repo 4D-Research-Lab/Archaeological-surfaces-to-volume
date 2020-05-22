@@ -1,6 +1,6 @@
 # This is a script made to calculate the volume between different surfaces
 # of archaeological excavation grounds. It implements different methods to do
-# so. The surfaces are triangle meshes.
+# so.
 #
 # Made by Bram Dekker (11428279) of the Univeristy of Amsterdam as a bachelor
 # thesis.
@@ -191,7 +191,7 @@ def center_tetrahedron(v1, v2, v3, v4):
     return tuple(el / 4 for el in s)
 
 
-def make_voxel_verts(center, length, width, height):
+def make_cuboid_verts(center, length, width, height):
     """Make a list of vertices for given center and sizes."""
     l, w, h = length / 2, width / 2, height / 2
     v0 = (center[0] - l, center[1] - w, center[2] - h)
@@ -205,7 +205,7 @@ def make_voxel_verts(center, length, width, height):
     return [v0, v1, v2, v3, v4, v5, v6, v7]
 
 
-def make_voxel_vert_faces(verts):
+def make_cuboid_vert_faces(verts):
     """Make a list of faces for given vertices of a cube."""
     f1 = (verts[0], verts[1], verts[3], verts[2])
     f2 = (verts[4], verts[5], verts[7], verts[6])
@@ -334,7 +334,7 @@ def add_primitive(x, y, z, cur_bm, primitive, length, width, height, minx,
         new_bm_verts = []
 
         # Get a list of the vertices of the box with center (x, y, z).
-        vs = make_voxel_verts((x, y, z), length, height, width)
+        vs = make_cuboid_verts((x, y, z), length, height, width)
 
         # Add the vertices to the mesh and store them in a list.
         for v in vs:
@@ -342,7 +342,7 @@ def add_primitive(x, y, z, cur_bm, primitive, length, width, height, minx,
             new_bm_verts.append(new_vert)
 
         # Use the list of BMVerts to make the faces of the tetrahedron.
-        fs = make_voxel_vert_faces(new_bm_verts)
+        fs = make_cuboid_vert_faces(new_bm_verts)
         for f in fs:
             cur_bm.faces.new(f)
 
@@ -398,7 +398,7 @@ def draw_and_export(temp_file_name, primitive, length, width, height, minx,
 
 def set_vol_primitive(length, width, height, primitive):
     """Calculate the volume of the specified primitive in cubic centimetres."""
-    if primitive == "voxel":
+    if primitive == "cuboid":
         vol_primitive = length * width * height * 1000000
     elif primitive == "tetra":
         vol_primitive = 1000000 * (length * width * height) / 6
@@ -468,23 +468,23 @@ def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
     return ((x, y, z) for x in xs for y in ys for z in zs)
 
 
-def process_voxel(
+def process_cuboid(
         x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
         vol_primitive, threshold, f, layer_index,
         r, g, b):
-    """Determine if voxel is part of the volume or not."""
+    """Determine if cuboid is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
     upper_mesh, lower_mesh = update_indices(upper_mesh, lower_mesh, "cubic")
 
-    # Determine center of voxel.
+    # Determine center of cuboid.
     center = (x+l/2, y+w/2, z+h/2)
 
-    # Decide if voxel is part of the volume.
+    # Decide if cuboid is part of the volume.
     in_volume = decide_in_volume(
         upper_mesh, lower_mesh, center, max_distance, threshold)
 
-    # If the voxel is part of the volume, add it to the primitive list and set
+    # If the cuboid is part of the volume, add it to the primitive list and set
     # the volume.
     if in_volume:
         line = "{} {} {} {} {} {} {}\n".format(
@@ -547,14 +547,14 @@ def space_oriented_volume_between_meshes(
     points = make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h)
 
     for x, y, z in points:
-        if primitive == "voxel":
-            # Check if current voxel is part of the volume.
-            cur_volume += process_voxel(
+        if primitive == "cuboid":
+            # Check if current cuboid is part of the volume.
+            cur_volume += process_cuboid(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
                 vol_primitive, threshold, f, layer_index,
                 r, g, b)
         elif primitive == "tetra":
-            # Check which tetrahedra in the current voxel are part of the
+            # Check which tetrahedra in the current cuboid are part of the
             # volume.
             cur_volume += process_tetra(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
@@ -566,7 +566,7 @@ def space_oriented_volume_between_meshes(
 
 def space_oriented_algorithm(
         meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
-        maxz, primitive="voxel", draw=True, test=False, export=False,
+        maxz, primitive="cuboid", draw=True, test=False, export=False,
         ply_name="pointmesh.ply"):
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
@@ -1557,7 +1557,7 @@ def main():
     selected_meshes = C.selected_objects
     init()
 
-    # Set info about threshold (in cm) for reducing the bounding box.
+    # Set info about threshold (in cm).
     threshold = 5
 
     # Determine bounding box and translate scene to origin.
@@ -1569,11 +1569,12 @@ def main():
     minx, maxx, miny, maxy, minz, maxz = update_minmax(
         minx, maxx, miny, maxy, minz, maxz, difx, dify, difz)
 
-    method = "space"  # or "space"
+    # Method can be set to 'space' or 'object'.
+    method = "space"
 
     if method == "space":
-        # Set number of primitives to divide the bounding box.
-        # num_x, num_y, num_z = 150, 150, 50
+        # Specify the primitive type to be used to be 'tetra' or 'cuboid'.
+        primitive = "tetra"
 
         # Size in centimeters for the primitives.
         length, width, height = 5, 5, 5
@@ -1587,8 +1588,7 @@ def main():
         export_ply_file = True
         ply_file_name = "testing_draw_22052020.ply"
 
-        # Run the space-oriented algorithm with the assigned primitive.
-        primitive = "tetra"  # or "tetra"
+        # Run the algorithm.
         volume = space_oriented_algorithm(
             ordered_meshes(selected_meshes), length, width, height, threshold,
             minx, maxx, miny, maxy, minz, maxz, primitive=primitive,

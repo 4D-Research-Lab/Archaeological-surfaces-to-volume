@@ -1,3 +1,6 @@
+# This script tests the space-oriented algorithm in vol_generation_script.py on
+# multiple objects in Blender. The results are written to the terminal. This
+# script needs to be run in Blender.
 import time
 import sys
 import bpy
