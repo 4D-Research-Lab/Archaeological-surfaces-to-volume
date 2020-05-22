@@ -1,5 +1,5 @@
 # 3D volume generation
-The code in `vol_generation_script.py` is a Blender ([Free to download here](https://www.blender.org/)) script written in Python 3 used to produce a 3D volumetric mesh/object between 2 input meshes. This can be done on more than 2 meshes, for each consecutive pair of meshes (top to bottom) a 3D volume with a certain color is generated. Also the volume of each of this layers and the total volume of all layers is calculated. The purpose of this is to give archeologists a tool to visualize and analyse their data better. The input data is expected to be different stadia of excavation surfaces and have to be already loaded and selected in Blender.
+The code in `vol_generation_script.py` is a Blender script written in Python 3 used to produce a 3D volumetric mesh/object between 2 input meshes. This can be done on more than 2 meshes, for each consecutive pair of meshes (top to bottom) a 3D volume with a certain color is generated. Also the volume of each of this layers and the total volume of all layers is calculated. The purpose of this is to give archeologists a tool to visualize and analyse their data better. The input data is expected to be different stadia of excavation surfaces and have to be already loaded and selected in Blender.
 
 ### Example input
 ![Example input](/Images/before_meshes.png "Exaple input")
@@ -8,13 +8,13 @@ The code in `vol_generation_script.py` is a Blender ([Free to download here](htt
 ![Example output](/Images/after_with_original.png "Example output")
 
 ### Example of the generated 3D volumetric mesh
-![Generated 3D volumetric mesh](/Images/after_no_originals.ong "Generated 3D volumetric mesh")
+![Generated 3D volumetric mesh](/Images/after_no_originals.png "Generated 3D volumetric mesh")
 
 This is made for my bachelor thesis project at University of Amsterdam on automated generation of a volumetric mesh from multiple polygonal meshes.
 
 
 ## Requirements
-If you want to execute this script Blender must be installed. In Blender you can load the script and run it, no external packages or modules are needed. The output can also be visualized in Blender.
+If you want to execute this script Blender must be installed ([Free to download here](https://www.blender.org/)). In Blender you can load the script and run it, no external packages or modules are needed. The output can also be visualized in Blender.
 
 ## Usage
 1. Load all your objects into Blender
@@ -27,7 +27,7 @@ If you want to execute this script Blender must be installed. In Blender you can
 ## User input
 In the main function (at the bottom of the script) the user can set some variables to create the output they want. Those variables are:
 - threshold: the minimum distance in centimeters between the meshes for it to be considered a significant distance, e.g. points with a distance shorter than threshold to the other mesh are considered not to be in between the meshes
-- method: specify the type of algorithm you want to run, space- or object-oriented (See [General Information](#general-information))
+- method: specify the type of algorithm you want to run, space- or object-oriented (See [General Information](#general-explanation-of-the-used-algorithms))
 
 For space-oriented:
 - primitive: type of volume primitve used, cuboids (cuboid) or tetrahedra (tetra)
