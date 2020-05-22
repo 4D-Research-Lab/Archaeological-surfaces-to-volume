@@ -12,10 +12,10 @@ import bpy
 import bmesh
 import mathutils
 import time
+import os
 import math
 import numpy as np
 import itertools
-from plyfile import PlyData, PlyElement
 import sys
 sys.setrecursionlimit(2500)
 
@@ -166,14 +166,17 @@ def ordered_meshes(selected_meshes):
     return [elem[1] for elem in sorted(mesh_list, reverse=True)]
 
 
-def export_ply_file(points, file_name):
-    """Export the center points of the mesh as a pointcloud in a ply file. The
-    file is saved in the Downloads folder with the name file_name."""
-    np_points = np.asarray(points, dtype=[
-        ("x", "f4"), ("y", "f4"), ("z", "f4"), ("red", "u1"), ("green", "u1"),
-        ("blue", "u1"), ("layer", "i4")])
-    vertex = PlyElement.describe(np_points, "vertex")
-    PlyData([vertex], text=True).write("Downloads/" + file_name)
+def init_ply_file(file_name, num):
+    """Initialize the ply file. This file will store all the centers of the
+    primitives."""
+    f = open("Downloads/" + file_name, 'w')
+    header = "ply\nformat ascii 1.0\nelement vertex {}\n".format(num) + \
+             "property float x\n" + \
+             "property float y\nproperty float z\nproperty uchar red\n" + \
+             "property uchar green\nproperty uchar blue\n" + \
+             "property int layer\nend_header\n"
+    f.write(header)
+    return f
 
 
 def dist_btwn_pts(p1, p2):
@@ -202,50 +205,15 @@ def make_voxel_verts(center, length, width, height):
     return [v0, v1, v2, v3, v4, v5, v6, v7]
 
 
-def make_voxel_faces(i):
+def make_voxel_vert_faces(verts):
     """Make a list of faces for given vertices of a cube."""
-    f1 = (i, i + 1, i + 3, i + 2)
-    f2 = (i + 4, i + 5, i + 7, i + 6)
-    f3 = (i, i + 2, i + 6, i + 4)
-    f4 = (i + 1, i + 3, i + 7, i + 5)
-    f5 = (i, i + 1, i + 5, i + 4)
-    f6 = (i + 2, i + 3, i + 7, i + 6)
+    f1 = (verts[0], verts[1], verts[3], verts[2])
+    f2 = (verts[4], verts[5], verts[7], verts[6])
+    f3 = (verts[0], verts[2], verts[6], verts[4])
+    f4 = (verts[1], verts[3], verts[7], verts[5])
+    f5 = (verts[0], verts[1], verts[5], verts[4])
+    f6 = (verts[2], verts[3], verts[7], verts[6])
     return [f1, f2, f3, f4, f5, f6]
-
-
-def draw_cubes(centers, length, width, height, rgba):
-    """Draw cubes from given centers, size and color"""
-    # Specify the color and faces for the new meshes.
-    color = D.materials.new("Layer_color")
-    index = 0
-    verts, faces = [], []
-
-    for cen in centers:
-        # Make the vertices of the new mesh.
-        vs = make_voxel_verts(cen, length, width, height)
-        verts.extend(vs)
-        faces.extend(make_voxel_faces(index))
-        index += 8
-
-    # Create a new mesh.
-    mesh = D.meshes.new("cubic_volume")
-    mesh.from_pydata(verts, [], faces)
-    mesh.validate()
-    mesh.update()
-
-    # Create new object and give it data.
-    new_object = D.objects.new("cubic_volume", mesh)
-    new_object.data = mesh
-
-    # Put object in the scene.
-    C.collection.objects.link(new_object)
-    C.view_layer.objects.active = new_object
-    new_object.select_set(True)
-
-    # Give the object the color rgba and deselect it.
-    C.active_object.data.materials.append(color)
-    C.object.active_material.diffuse_color = rgba
-    new_object.select_set(False)
 
 
 def get_other_tetra_verts(ratio_l, ratio_w, ratio_h, l, w, h, v0):
@@ -301,39 +269,34 @@ def make_tetra_verts(center, length, width, height, minx, miny, minz):
     return [v0, v1, v2, v3]
 
 
-def make_tetra_faces(i):
-    """Return a list of 4 faces based on the vertex index."""
-    f1 = (i, i + 1, i + 2)
-    f2 = (i, i + 1, i + 3)
-    f3 = (i, i + 2, i + 3)
-    f4 = (i + 1, i + 2, i + 3)
+def make_tetra_vert_faces(verts):
+    """Return the faces as tuples of BMVerts."""
+    f1 = (verts[0], verts[1], verts[2])
+    f2 = (verts[0], verts[1], verts[3])
+    f3 = (verts[0], verts[2], verts[3])
+    f4 = (verts[1], verts[2], verts[3])
     return [f1, f2, f3, f4]
 
 
-def draw_tetrahedra(centers, length, height, width, minx, miny, minz, rgba):
-    """Draw tetrahedra from given vertices and color."""
-    # Specify the color and faces for the new meshes.
-    color = D.materials.new("Layer_color")
-
-    verts, faces = [], []
-    index = 0
-
-    for cen in centers:
-        # Make the vertices of the new mesh.
-        vs = make_tetra_verts(cen, length, height, width, minx, miny, minz)
-        verts.extend(vs)
-        faces.extend(make_tetra_faces(index))
-        index += 4
+def finish_bmesh(bm, index, primitive):
+    """Write bmesh to a new mesh object and color it with the color on position
+    index in the RGBAS list."""
+    if primitive == "tetra":
+        mesh = D.meshes.new("tetrahedron_volume")
+    else:
+        mesh = D.meshes.new("cubic_volume")
 
     # Create new mesh structure.
-    mesh = D.meshes.new("tetrahedron_volume")
-    mesh.from_pydata(verts, [], faces)
+    bm.to_mesh(mesh)
+    bm.free()
     mesh.validate()
     mesh.update()
 
     # Create new object and give it data.
-    new_object = D.objects.new("tetrahedron_volume", mesh)
-    new_object.data = mesh
+    if primitive == "tetra":
+        new_object = D.objects.new("tetrahedron_volume", mesh)
+    else:
+        new_object = D.objects.new("cubic_volume", mesh)
 
     # Put object in the scene.
     C.collection.objects.link(new_object)
@@ -341,9 +304,96 @@ def draw_tetrahedra(centers, length, height, width, minx, miny, minz, rgba):
     new_object.select_set(True)
 
     # Give the object the color rgba and deselect it.
+    color = D.materials.new("Layer_color")
     C.active_object.data.materials.append(color)
-    C.object.active_material.diffuse_color = rgba
+    C.object.active_material.diffuse_color = RGBAS[index % len(RGBAS)]
     new_object.select_set(False)
+
+
+def add_primitive(x, y, z, cur_bm, primitive, length, width, height, minx,
+                  miny, minz):
+    """Add a primitive with center (x, y, z) and a size of
+    (length * width * height) to cur_bm mesh."""
+    if primitive == "tetra":
+        new_bm_verts = []
+
+        # Get a list of the vertices of the tetrahedron with center (x, y, z).
+        vs = make_tetra_verts((x, y, z), length, height, width, minx, miny,
+                              minz)
+
+        # Add the vertices to the mesh and store them in a list.
+        for v in vs:
+            new_vert = cur_bm.verts.new(v)
+            new_bm_verts.append(new_vert)
+
+        # Use the list of BMVerts to make the faces of the tetrahedron.
+        fs = make_tetra_vert_faces(new_bm_verts)
+        for f in fs:
+            cur_bm.faces.new(f)
+    else:
+        new_bm_verts = []
+
+        # Get a list of the vertices of the box with center (x, y, z).
+        vs = make_voxel_verts((x, y, z), length, height, width)
+
+        # Add the vertices to the mesh and store them in a list.
+        for v in vs:
+            new_vert = cur_bm.verts.new(v)
+            new_bm_verts.append(new_vert)
+
+        # Use the list of BMVerts to make the faces of the tetrahedron.
+        fs = make_voxel_vert_faces(new_bm_verts)
+        for f in fs:
+            cur_bm.faces.new(f)
+
+
+def draw_and_export(temp_file_name, primitive, length, width, height, minx,
+                    miny, minz, num_primitives, draw, export, ply_name):
+    """Draw and export the calculated volume between the meshes if that is
+    specified."""
+    # If the layers need to be exported as PLY-file, initialize a PLY file
+    # with a correct header.
+    if export:
+        ply_file = init_ply_file(ply_name, num_primitives)
+
+    # If the layers need to be drawn, initialize a new mesh.
+    if draw:
+        cur_bm = bmesh.new()
+
+    # If the layers dont need to be drawn or exported, return. Else
+    if not draw and not export:
+        return
+    else:
+        layer_index = 0
+        with open(temp_file_name, 'r') as temp_file:
+            for line in temp_file:
+                # Initialize a PLY-file if needed.
+                if export:
+                    ply_file.write(line)
+
+                # Extract the center and layer index of the next primitive, if
+                # the mesh has to be drawn.
+                if draw:
+                    x, y, z, _, _, _, i = line.rstrip().split(' ')
+                    x, y, z = float(x), float(y), float(z)
+                    i = int(i)
+
+                    # Draw the layer to the screen if the last primitive of
+                    # this layer is found. Pass index to specify color.
+                    if not i == layer_index:
+                        finish_bmesh(cur_bm, (i - 1), primitive)
+                        cur_bm = bmesh.new()
+                        layer_index = i
+
+                    # Add the primitive to the current mesh.
+                    add_primitive(x, y, z, cur_bm, primitive, length, width,
+                                  height, minx, miny, minz)
+
+            # Draw the last layer.
+            if draw:
+                finish_bmesh(cur_bm, layer_index, primitive)
+    if export:
+        ply_file.close()
 
 
 def set_vol_primitive(length, width, height, primitive):
@@ -418,15 +468,10 @@ def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
     return ((x, y, z) for x in xs for y in ys for z in zs)
 
 
-def make_vol_prims_centers(tetra_array):
-    """For each primitive corners in the array, transform it to its center."""
-    centers = (center_tetrahedron(*verts) for verts in tetra_array)
-    return centers
-
-
 def process_voxel(
         x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-        volume_primitives, vol_primitive, threshold):
+        vol_primitive, threshold, f, layer_index,
+        r, g, b):
     """Determine if voxel is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -442,7 +487,9 @@ def process_voxel(
     # If the voxel is part of the volume, add it to the primitive list and set
     # the volume.
     if in_volume:
-        volume_primitives.append(center)
+        line = "{} {} {} {} {} {} {}\n".format(
+            center[0], center[1], center[2], r, g, b, layer_index)
+        f.write(line)
         volume = vol_primitive
 
     return volume
@@ -450,7 +497,8 @@ def process_voxel(
 
 def process_tetra(
         x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-        volume_primitives, vol_primitive, threshold):
+        vol_primitive, threshold, f, layer_index,
+        r, g, b):
     """Determine if tetra is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
@@ -471,7 +519,9 @@ def process_tetra(
         # If the tetrahedron is part of the volume, add it to the primitive
         # list and add its volume to the volume variable.
         if in_volume:
-            volume_primitives.append(center)
+            line = "{} {} {} {} {} {} {}\n".format(
+                center[0], center[1], center[2], r, g, b, layer_index)
+            f.write(line)
             volume += vol_primitive
 
     return volume
@@ -479,11 +529,12 @@ def process_tetra(
 
 def space_oriented_volume_between_meshes(
         length, width, height, threshold, minx, maxx, miny, maxy, minz, maxz,
-        upper_mesh, lower_mesh, max_distance, primitive):
+        upper_mesh, lower_mesh, max_distance, primitive, f, layer_index,
+        layer_color):
     """Calculate the volume and make a 3D model of the volume between 2
     meshes."""
     # Initialize volume primitives list and the volume.
-    volume_primitives = []
+    r, g, b = [math.ceil(255 * color) for color in layer_color[:3]]
     cur_volume = 0
 
     # Determine primitive size
@@ -500,15 +551,17 @@ def space_oriented_volume_between_meshes(
             # Check if current voxel is part of the volume.
             cur_volume += process_voxel(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive, threshold)
+                vol_primitive, threshold, f, layer_index,
+                r, g, b)
         elif primitive == "tetra":
             # Check which tetrahedra in the current voxel are part of the
             # volume.
             cur_volume += process_tetra(
                 x, y, z, l, w, h, upper_mesh, lower_mesh, max_distance,
-                volume_primitives, vol_primitive, threshold)
+                vol_primitive, threshold, f, layer_index,
+                r, g, b)
 
-    return cur_volume, volume_primitives
+    return cur_volume
 
 
 def space_oriented_algorithm(
@@ -518,7 +571,8 @@ def space_oriented_algorithm(
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
-    points = []
+    temp_file_name = "Downloads/vol_gen_temp_storage.txt"
+    f = open(temp_file_name, 'w')
     tot_volume = 0
     max_distance = maxz - minz
     length, width, height = length / 100, width / 100, height / 100
@@ -527,10 +581,13 @@ def space_oriented_algorithm(
     # For all ordered mesh pairs from top to bottom, run the space-oriented
     # algorithm to get volume and list of primitives.
     for i, (upper_mesh, lower_mesh) in enumerate(zip(meshes[:-1], meshes[1:])):
+        layer_color = RGBAS[lower_mesh % len(RGBAS)]
+
         # Execute space-oriented algorithm between 2 meshes.
-        volume, vol_prims = space_oriented_volume_between_meshes(
+        volume = space_oriented_volume_between_meshes(
             length, width, height, threshold, minx, maxx, miny, maxy, minz,
-            maxz, upper_mesh, lower_mesh, max_distance, primitive)
+            maxz, upper_mesh, lower_mesh, max_distance, primitive, f, i,
+            layer_color)
 
         # Print the size of the primitives used.
         print_layer_volume(test, volume, i)
@@ -538,23 +595,20 @@ def space_oriented_algorithm(
         # Update total volume.
         tot_volume += volume
 
-        # Draw the 3D model based on the type of primitive if it is not a test.
-        if draw:
-            if primitive == "voxel":
-                draw_cubes(vol_prims, length, width, height,
-                           RGBAS[lower_mesh % len(RGBAS)])
-            elif primitive == "tetra":
-                draw_tetrahedra(vol_prims, length, width, height, minx, miny,
-                                minz, RGBAS[lower_mesh % len(RGBAS)])
+    # Close the temporary file.
+    f.close()
 
-        if export:
-            r, g, b = [math.ceil(255 * color)
-                       for color in RGBAS[lower_mesh % len(RGBAS)][:3]]
-            vol_prims = [(x, y, z, r, g, b, i) for (x, y, z) in vol_prims]
-            points.extend(vol_prims)
+    # Calculate the number of primitives added which is needed for the
+    # PLY-file.
+    number_of_primitives = round(
+        tot_volume / set_vol_primitive(length, width, height, primitive))
 
-    if export:
-        export_ply_file(points, ply_name)
+    # Draw the layers in Blender and export all as 1 PLY-file if specified.
+    draw_and_export(temp_file_name, primitive, length, width, height, minx,
+                    miny, minz, number_of_primitives, draw, export, ply_name)
+
+    # Remove the temporary file.
+    os.remove(temp_file_name)
 
     return tot_volume
 
@@ -1526,12 +1580,12 @@ def main():
         print_primitive_size(length, width, height)
 
         # Option to turn off drawing, it gives a minor performance boost.
-        draw = True
+        draw = False
 
         # Decide if you want a pointcloud exported so you are able to see
         # a solid object.
-        export_ply_file = False
-        ply_file_name = "test_without_draw.ply"
+        export_ply_file = True
+        ply_file_name = "testing_draw_22052020.ply"
 
         # Run the space-oriented algorithm with the assigned primitive.
         primitive = "tetra"  # or "tetra"
