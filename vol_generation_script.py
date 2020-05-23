@@ -283,7 +283,7 @@ def finish_bmesh(bm, index, primitive):
     index in the RGBAS list."""
     if primitive == "tetra":
         mesh = D.meshes.new("tetrahedron_volume")
-    else:
+    elif primitive == "cuboid":
         mesh = D.meshes.new("cubic_volume")
 
     # Create new mesh structure.
@@ -295,7 +295,7 @@ def finish_bmesh(bm, index, primitive):
     # Create new object and give it data.
     if primitive == "tetra":
         new_object = D.objects.new("tetrahedron_volume", mesh)
-    else:
+    elif primitive == "cuboid":
         new_object = D.objects.new("cubic_volume", mesh)
 
     # Put object in the scene.
@@ -330,7 +330,7 @@ def add_primitive(x, y, z, cur_bm, primitive, length, width, height, minx,
         fs = make_tetra_vert_faces(new_bm_verts)
         for f in fs:
             cur_bm.faces.new(f)
-    else:
+    elif primitive == "cuboid":
         new_bm_verts = []
 
         # Get a list of the vertices of the box with center (x, y, z).
@@ -440,21 +440,25 @@ def check_inside_mesh(mesh, center, max_distance, direc="up"):
 def decide_in_volume(upper_mesh, lower_mesh, center, max_distance, threshold):
     """Decide if the primitive on the given position belongs to the volume
     between the meshes."""
-    # Cast ray up to upper mesh and ray down to lower mesh.
+    # Cast ray up to upper mesh and check if it is in between the 2 meshes.
     res_up = D.objects[upper_mesh].ray_cast(
         center, (0, 0, 1), distance=max_distance)
+    if (not res_up[0] or not check_inside_mesh(
+            upper_mesh, center, max_distance, direc="up")):
+        return False
+
+    # Cast ray down to lower mesh and check if it is in between the 2 meshes.
     res_down = D.objects[lower_mesh].ray_cast(
         center, (0, 0, -1), distance=max_distance)
+    if (not res_down[0] or not check_inside_mesh(
+            lower_mesh, center, max_distance, direc="down")):
+        return False
 
-    # If both rays hit the mesh, centroid is in between the meshes.
-    if (check_inside_mesh(upper_mesh, center, max_distance, direc="up") and
-            check_inside_mesh(lower_mesh, center, max_distance, direc="down")
-            and dist_btwn_pts(res_up[1], res_down[1]) >= threshold):
-        in_volume = True
-    else:
-        in_volume = False
+    # If center is in between the 2 meshes, check if its exceed the threshold.
+    if dist_btwn_pts(res_up[1], res_down[1]) < threshold:
+        return False
 
-    return in_volume
+    return True
 
 
 def make_point_list(minx, maxx, miny, maxy, minz, maxz, l, w, h):
@@ -475,7 +479,6 @@ def process_cuboid(
     """Determine if cuboid is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
-    upper_mesh, lower_mesh = update_indices(upper_mesh, lower_mesh, "cubic")
 
     # Determine center of cuboid.
     center = (x+l/2, y+w/2, z+h/2)
@@ -490,7 +493,7 @@ def process_cuboid(
         line = "{} {} {} {} {} {} {}\n".format(
             center[0], center[1], center[2], r, g, b, layer_index)
         f.write(line)
-        volume = vol_primitive
+        volume += vol_primitive
 
     return volume
 
@@ -502,7 +505,6 @@ def process_tetra(
     """Determine if tetra is part of the volume or not."""
     # Initialize volume to zero.
     volume = 0
-    upper_mesh, lower_mesh = update_indices(upper_mesh, lower_mesh, "tetra")
 
     # Get all vertices for the 6 tetrahedra.
     v1, v2 = (x, y, z), (x + l, y + w, z + h)
@@ -1574,14 +1576,14 @@ def main():
 
     if method == "space":
         # Specify the primitive type to be used to be 'tetra' or 'cuboid'.
-        primitive = "tetra"
+        primitive = "cuboid"
 
         # Size in centimeters for the primitives.
         length, width, height = 5, 5, 5
         print_primitive_size(length, width, height)
 
         # Option to turn off drawing, it gives a minor performance boost.
-        draw = False
+        draw = True
 
         # Decide if you want a pointcloud exported so you are able to see
         # a solid object.
