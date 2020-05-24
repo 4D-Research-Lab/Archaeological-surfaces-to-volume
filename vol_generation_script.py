@@ -318,7 +318,7 @@ def add_primitive(x, y, z, cur_bm, primitive, length, width, height, minx,
         new_bm_verts = []
 
         # Get a list of the vertices of the tetrahedron with center (x, y, z).
-        vs = make_tetra_verts((x, y, z), length, height, width, minx, miny,
+        vs = make_tetra_verts((x, y, z), length, width, height, minx, miny,
                               minz)
 
         # Add the vertices to the mesh and store them in a list.
@@ -334,7 +334,7 @@ def add_primitive(x, y, z, cur_bm, primitive, length, width, height, minx,
         new_bm_verts = []
 
         # Get a list of the vertices of the box with center (x, y, z).
-        vs = make_cuboid_verts((x, y, z), length, height, width)
+        vs = make_cuboid_verts((x, y, z), length, width, height)
 
         # Add the vertices to the mesh and store them in a list.
         for v in vs:
@@ -481,7 +481,7 @@ def process_cuboid(
     volume = 0
 
     # Determine center of cuboid.
-    center = (x+l/2, y+w/2, z+h/2)
+    center = (x + (l / 2), y + (w / 2), z + (h / 2))
 
     # Decide if cuboid is part of the volume.
     in_volume = decide_in_volume(
@@ -1579,7 +1579,7 @@ def main():
         primitive = "cuboid"
 
         # Size in centimeters for the primitives.
-        length, width, height = 5, 5, 5
+        length, width, height = 5, 5, 2.5
         print_primitive_size(length, width, height)
 
         # Option to turn off drawing, it gives a minor performance boost.
@@ -1587,8 +1587,8 @@ def main():
 
         # Decide if you want a pointcloud exported so you are able to see
         # a solid object.
-        export_ply_file = True
-        ply_file_name = "testing_draw_22052020.ply"
+        export_ply_file = False
+        ply_file_name = "testing_draw_23052020.ply"
 
         # Run the algorithm.
         volume = space_oriented_algorithm(
