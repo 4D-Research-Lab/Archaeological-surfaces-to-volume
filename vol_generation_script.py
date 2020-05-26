@@ -49,8 +49,9 @@ def init(test=False):
 
 def is_volume(obj):
     """Check if object is a generated volume or not."""
-    if (obj.name.startswith("triangle_mesh") or
-            obj.name.startswith("cubic") or obj.name.startswith("tetra")):
+    if (obj.name.startswith("triangle_mesh_volume") or
+            obj.name.startswith("cubic_volume") or
+            obj.name.startswith("tetrahedron_volume")):
         return True
 
     return False
@@ -166,10 +167,10 @@ def ordered_meshes(selected_meshes):
     return [elem[1] for elem in sorted(mesh_list, reverse=True)]
 
 
-def init_ply_file(file_name, num):
+def init_ply_file(file_path, file_name, num):
     """Initialize the ply file. This file will store all the centers of the
     primitives."""
-    f = open("Downloads/" + file_name, 'w')
+    f = open(file_path + file_name, 'w')
     header = "ply\nformat ascii 1.0\nelement vertex {}\n".format(num) + \
              "property float x\n" + \
              "property float y\nproperty float z\nproperty uchar red\n" + \
@@ -348,13 +349,14 @@ def add_primitive(x, y, z, cur_bm, primitive, length, width, height, minx,
 
 
 def draw_and_export(temp_file_name, primitive, length, width, height, minx,
-                    miny, minz, num_primitives, draw, export, ply_name):
+                    miny, minz, num_primitives, draw, export, file_path,
+                    ply_name):
     """Draw and export the calculated volume between the meshes if that is
     specified."""
     # If the layers need to be exported as PLY-file, initialize a PLY file
     # with a correct header.
     if export:
-        ply_file = init_ply_file(ply_name, num_primitives)
+        ply_file = init_ply_file(file_path, ply_name, num_primitives)
 
     # If the layers need to be drawn, initialize a new mesh.
     if draw:
@@ -569,11 +571,11 @@ def space_oriented_volume_between_meshes(
 def space_oriented_algorithm(
         meshes, length, width, height, threshold, minx, maxx, miny, maxy, minz,
         maxz, primitive="cuboid", draw=True, test=False, export=False,
-        ply_name="pointmesh.ply"):
+        file_path="Downloads/", ply_name="pointmesh.ply"):
     """Space-oriented algorithm to make a 3D model out of multiple trianglar
     meshes."""
     # Initialize the total volume and maximum vertical distance.
-    temp_file_name = "Downloads/vol_gen_temp_storage.txt"
+    temp_file_name = "vol_gen_temp_storage.txt"
     f = open(temp_file_name, 'w')
     tot_volume = 0
     max_distance = maxz - minz
@@ -607,7 +609,8 @@ def space_oriented_algorithm(
 
     # Draw the layers in Blender and export all as 1 PLY-file if specified.
     draw_and_export(temp_file_name, primitive, length, width, height, minx,
-                    miny, minz, number_of_primitives, draw, export, ply_name)
+                    miny, minz, number_of_primitives, draw, export, file_path,
+                    ply_name)
 
     # Remove the temporary file.
     os.remove(temp_file_name)
@@ -1588,13 +1591,19 @@ def main():
         # Decide if you want a pointcloud exported so you are able to see
         # a solid object.
         export_ply_file = False
+
+        # Specify place to save PLY-file and its name. If you want the PLY-file
+        # to be saved in the home directory, set path to "". Otherwise specify
+        # directories and end with a /.
+        path_to_file = "Downloads/"
         ply_file_name = "testing_draw_23052020.ply"
 
         # Run the algorithm.
         volume = space_oriented_algorithm(
             ordered_meshes(selected_meshes), length, width, height, threshold,
             minx, maxx, miny, maxy, minz, maxz, primitive=primitive,
-            export=export_ply_file, ply_name=ply_file_name, draw=draw)
+            export=export_ply_file, file_path=path_to_file,
+            ply_name=ply_file_name, draw=draw)
     elif method == "object":
         # Run the object-oriented algorithm.
         volume = object_oriented_algorithm(

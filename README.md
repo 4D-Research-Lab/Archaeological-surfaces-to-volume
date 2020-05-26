@@ -2,13 +2,13 @@
 The code in `vol_generation_script.py` is a Blender script written in Python 3 used to produce a 3D volumetric mesh/object between 2 input meshes. This can be done on more than 2 meshes, for each consecutive pair of meshes (top to bottom) a 3D volume with a certain color is generated. Also the volume of each of this layers and the total volume of all layers is calculated. The purpose of this is to give archeologists a tool to visualize and analyse their data better. The input data is expected to be different stadia of excavation surfaces and have to be already loaded and selected in Blender.
 
 ### Example input
-![Example input](/Images/before_meshes.png "Exaple input")
+<img src="/Images/before_meshes.png" alt="Example input" width="600">
 
 ### Example output
-![Example output](/Images/after_with_original.png "Example output")
+<img src="/Images/before_meshes.png" alt="Example output" width="600">
 
 ### Example of the generated 3D volumetric mesh
-![Generated 3D volumetric mesh](/Images/after_no_originals.png "Generated 3D volumetric mesh")
+<img src="/Images/before_meshes.png" alt="Generated 3D volumetric mesh" width="600">
 
 This is made for my bachelor thesis project at University of Amsterdam on automated generation of a volumetric mesh from multiple polygonal meshes.
 
@@ -24,6 +24,17 @@ If you want to execute this script Blender must be installed ([Free to download 
 5. Run the script
 6. Visualize and analyze the output
 
+#### Important notes!
+**Removal of generated objects**: The script uses specific names for the generated volumes. If the script is executed it checks if any objects with this name are present and removes them if they are. The names used are:
+- triangle_mesh_volume: for objects created with the object-oriented algorithm
+- cubic_volume: for objects created with the cuboid space-oriented algorithm
+- tetrahedron_volume: for objects created with the tetrahedra space-oriented algorithm
+Thus if you happen to have loaded objects in Blender with names that starts with any of the above names, they will be removed by the script. Also if you change the names of the generated objects they will not be removed by the script.
+
+**Exporting the PLY-file**: PLY-files are exported if the `export_ply_file` variable is set to True to the directory specified with the `path_to_file` variable. This is the path from the users home directory. This path has to be valid with directories that already exist on the user's file system. If not the script will fail and give an error.
+
+**Temporary storage file**: this file (`vol_gen_temp_storage.txt`) is always created in the home directory of the user. It will be removed if the script executes well, but will not when the script fails. If a file with this name already exists in the home directory it will be overwritten by the script and thus it would be best to remove or rename that file.
+
 ## User input
 In the main function (at the bottom of the script) the user can set some variables to create the output they want. Those variables are:
 - threshold: the minimum distance in centimeters between the meshes for it to be considered a significant distance, e.g. points with a distance shorter than threshold to the other mesh are considered not to be in between the meshes
@@ -36,6 +47,7 @@ For space-oriented:
 - height: height of the volume primitive to be used in centimeters
 - draw: draw the generated 3D volumetric mesh or not
 - export_ply_file: export the generated 3D volumetric mesh as PLY-file or not
+- path_to_file: specify the path to the directory where the PLY-file must be stored
 - ply_file_name: specify the name of the exported PLY-file
 
 ## General explanation of the used algorithms
