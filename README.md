@@ -5,10 +5,10 @@ The code in `vol_generation_script.py` is a Blender script written in Python 3 u
 <img src="/Images/before_meshes.png" alt="Example input" width="600">
 
 ### Example output
-<img src="/Images/before_meshes.png" alt="Example output" width="600">
+<img src="/Images/after_with_original.png" alt="Example output" width="600">
 
 ### Example of the generated 3D volumetric mesh
-<img src="/Images/before_meshes.png" alt="Generated 3D volumetric mesh" width="600">
+<img src="/Images/after_no_originals.png" alt="Generated 3D volumetric mesh" width="600">
 
 This is made for my bachelor thesis project at University of Amsterdam on automated generation of a volumetric mesh from multiple polygonal meshes.
 
@@ -24,7 +24,7 @@ If you want to execute this script Blender must be installed ([Free to download 
 5. Run the script
 6. Visualize and analyze the output
 
-#### Important notes!
+#### ---------- Important notes! ----------
 **Removal of generated objects**: The script uses specific names for the generated volumes. If the script is executed it checks if any objects with this name are present and removes them if they are. The names used are:
 - triangle_mesh_volume: for objects created with the object-oriented algorithm
 - cubic_volume: for objects created with the cuboid space-oriented algorithm
