@@ -17,12 +17,13 @@ This is made for my bachelor thesis project at University of Amsterdam on automa
 If you want to execute this script Blender must be installed ([Free to download here](https://www.blender.org/)). In Blender you can load the script and run it, no external packages or modules are needed. The output can also be visualized in Blender.
 
 ## Usage
-1. Load all your objects into Blender
-2. Load this script into Blender (scripting tab)
-3. Specifiy which algorithm you want to run and set some variables to your preference (See [User input](#user-input))
-4. Select all objects between which you want to generate a volumetric mesh
-5. Run the script
-6. Visualize and analyze the output
+1. Run Blender as 'administrator' 
+2. Load all your objects into Blender
+3. Load this script into Blender (scripting tab)
+4. Specifiy which algorithm you want to run and set some variables to your preference (See [User input](#user-input))
+5. Select all objects between which you want to generate a volumetric mesh
+6. Run the script
+7. Visualize and analyze the output
 
 #### ---------- Important notes! ----------
 **Removal of generated objects**: The script uses specific names for the generated volumes. If the script is executed it checks if any objects with this name are present and removes them if they are. The names used are:
